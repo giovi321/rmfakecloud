@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
+	"regexp"
+	"strconv"
 
 	"github.com/ddvk/rmfakecloud/internal/archive"
 	"github.com/ddvk/rmfakecloud/internal/encoding/rm"
@@ -17,6 +20,10 @@ import (
 // own size. Both pages are rendered at the same size, so there is nothing to
 // scale or move.
 const stampDescription = "position:c, scalefactor:1 abs, rotation:0, opacity:1"
+
+// fitDescription fits a stamp to the page it goes on. Used where the stamp has
+// already been cut to the same shape as the page.
+const fitDescription = "position:c, scalefactor:1 rel, rotation:0, opacity:1"
 
 // PageSize is the size of one output page, in PDF points.
 type PageSize struct {
@@ -205,7 +212,11 @@ func renderPage(page Page, size PageSize) ([]byte, error) {
 		if err := ExportV6ToPdfNative(page.Data, buf); err != nil {
 			return nil, err
 		}
-		return buf.Bytes(), nil
+		if size.Width <= 0 || size.Height <= 0 {
+			// A notebook: there is nothing to line the ink up with.
+			return buf.Bytes(), nil
+		}
+		return cutV6ToPage(page.Data, buf.Bytes(), size)
 	}
 
 	single := &MyArchive{Zip: archive.Zip{Pages: []archive.Page{{}}}}
@@ -248,4 +259,131 @@ func stampOnPayload(annotations []byte, payload io.ReadSeeker) ([]byte, error) {
 		return nil, fmt.Errorf("failed to lay the annotations over the document: %w", err)
 	}
 	return stamped.Bytes(), nil
+}
+
+// The device renders a page at these dimensions, and reMarkable's own screen
+// is this many pixels, so ink coordinates are in this space.
+const (
+	deviceCanvasWidth  = 1404.0
+	deviceCanvasHeight = 1872.0
+	// devicePointScale is the points per canvas pixel that rmc-go renders at.
+	devicePointScale = 72.0 / 226.0
+)
+
+// viewBoxPattern pulls the origin out of the SVG rmc-go writes.
+var viewBoxPattern = regexp.MustCompile(`viewBox="(-?[0-9.]+) (-?[0-9.]+) (-?[0-9.]+) (-?[0-9.]+)"`)
+
+// cutV6ToPage takes the ink of a v6 page and puts the part of it that sits on
+// the document page onto a page of that size, so the ink lands where it was
+// written.
+//
+// rmc-go sizes its output from the ink, not from the device canvas, and the
+// canvas can sit anywhere inside it because the device lets writing run off
+// the page in any direction. The SVG it writes carries the origin in its
+// viewBox, which is the only way to find the canvas from outside the library.
+//
+// Ink written beside the page rather than on it is left out. It belongs to no
+// page of the document.
+func cutV6ToPage(rmData, ink []byte, size PageSize) ([]byte, error) {
+	minX, minY, err := v6InkOrigin(rmData)
+	if err != nil {
+		log.Warnf("cannot place the ink on the page, leaving it at its own size: %v", err)
+		return ink, nil
+	}
+
+	// Where the canvas sits inside the rendered ink, measured from its top left.
+	canvasX := -deviceCanvasWidth / 2 * devicePointScale
+	canvasX -= minX
+	canvasY := -minY
+
+	// Where the document page sits on the canvas. The device fits the page to
+	// the canvas and centres it.
+	fit := math.Min(deviceCanvasWidth/size.Width, deviceCanvasHeight/size.Height)
+	pageW := size.Width * fit * devicePointScale
+	pageH := size.Height * fit * devicePointScale
+	pageX := canvasX + (deviceCanvasWidth-size.Width*fit)/2*devicePointScale
+	pageY := canvasY + (deviceCanvasHeight-size.Height*fit)/2*devicePointScale
+
+	inkHeight, err := pdfPageHeight(ink)
+	if err != nil {
+		return nil, err
+	}
+
+	// PDF boxes are measured from the bottom.
+	lowerY := inkHeight - pageY - pageH
+	boxDefinition := fmt.Sprintf("[%.2f %.2f %.2f %.2f]", pageX, lowerY, pageX+pageW, lowerY+pageH)
+	box, err := api.Box(boxDefinition, types.POINTS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe the page area of the ink: %w", err)
+	}
+
+	conf := model.NewDefaultConfiguration()
+	cut := &bytes.Buffer{}
+	if err := api.Crop(bytes.NewReader(ink), cut, nil, box, conf); err != nil {
+		return nil, fmt.Errorf("failed to cut the ink to the page: %w", err)
+	}
+
+	blank, err := renderBlankPage(size)
+	if err != nil {
+		return nil, err
+	}
+
+	// The cut is the same shape as the page, so fitting it is exact.
+	stamp, err := api.PDFWatermarkForReadSeeker(bytes.NewReader(cut.Bytes()), 1,
+		fitDescription, true, false, types.POINTS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare the ink overlay: %w", err)
+	}
+
+	out := &bytes.Buffer{}
+	if err := api.AddWatermarks(bytes.NewReader(blank), out, nil, stamp, conf); err != nil {
+		return nil, fmt.Errorf("failed to put the ink on the page: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
+// v6InkOrigin reads the top left corner of the rendered ink in its own
+// coordinates, from the viewBox of the SVG rmc-go writes for the same page.
+func v6InkOrigin(rmData []byte) (minX, minY float64, err error) {
+	svg := &bytes.Buffer{}
+	if err := ExportV6ToSvgNative(rmData, svg); err != nil {
+		return 0, 0, err
+	}
+
+	match := viewBoxPattern.FindSubmatch(svg.Bytes())
+	if match == nil {
+		return 0, 0, fmt.Errorf("the rendered svg has no viewBox")
+	}
+
+	if minX, err = strconv.ParseFloat(string(match[1]), 64); err != nil {
+		return 0, 0, err
+	}
+	if minY, err = strconv.ParseFloat(string(match[2]), 64); err != nil {
+		return 0, 0, err
+	}
+	return minX, minY, nil
+}
+
+// pdfPageHeight reads the height of the first page.
+func pdfPageHeight(pdf []byte) (float64, error) {
+	dims, err := api.PageDims(bytes.NewReader(pdf), model.NewDefaultConfiguration())
+	if err != nil {
+		return 0, err
+	}
+	if len(dims) == 0 {
+		return 0, fmt.Errorf("the rendered ink has no pages")
+	}
+	return dims[0].Height, nil
+}
+
+// renderBlankPage makes an empty page of the given size.
+func renderBlankPage(size PageSize) ([]byte, error) {
+	empty := &MyArchive{Zip: archive.Zip{Pages: []archive.Page{{}}}}
+	buf := &bytes.Buffer{}
+	generator := PdfGenerator{}
+	options := PdfGeneratorOptions{AllPages: true, PageSizes: []PageSize{size}}
+	if err := generator.Generate(empty, buf, options); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
