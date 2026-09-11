@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -17,6 +18,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/ddvk/rmfakecloud/internal/storage/exporter"
+	"github.com/ddvk/rmfakecloud/internal/templates"
 )
 
 // DefaultTrashDir name of the trash dir
@@ -30,6 +32,18 @@ const (
 // FileSystemStorage store everything to disk
 type FileSystemStorage struct {
 	Cfg *config.Config
+
+	templatesOnce sync.Once
+	templates     *templates.Store
+}
+
+// templateStore holds the page templates copied off a device. A server
+// without any simply draws no template, which is what it did before.
+func (fs *FileSystemStorage) templateStore() *templates.Store {
+	fs.templatesOnce.Do(func() {
+		fs.templates = templates.NewStore(fs.Cfg.TemplatesDir)
+	})
+	return fs.templates
 }
 
 func sanitizeFileName(fileName string) string {

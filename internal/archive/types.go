@@ -139,7 +139,11 @@ type Content struct {
 	// file format. Use NormalizePages to read either shape.
 	CPages CPages `json:"cPages"`
 	// Pages is a list of page IDs
-	Pages          []string  `json:"pages"`
+	Pages []string `json:"pages"`
+	// PageTemplates names the template of each page in Pages, in the same
+	// order. NormalizePages fills it from the schema 2 list; it is not a
+	// field of the content file itself.
+	PageTemplates  []string  `json:"-"`
 	Tags           []PageTag `json:"pageTags"`
 	RedirectionMap []int     `json:"redirectionPageMap"`
 	TextScale      int       `json:"textScale"`
@@ -205,14 +209,17 @@ func (c *Content) NormalizePages() {
 	}
 
 	pages := make([]string, 0, len(c.CPages.Pages))
+	pageTemplates := make([]string, 0, len(c.CPages.Pages))
 	for _, p := range c.CPages.Pages {
 		if p.Deleted != nil && p.Deleted.Value > 0 {
 			continue
 		}
 		pages = append(pages, p.ID)
+		pageTemplates = append(pageTemplates, p.Template.Value)
 	}
 
 	c.Pages = pages
+	c.PageTemplates = pageTemplates
 	if c.PageCount <= 0 {
 		c.PageCount = len(pages)
 	}

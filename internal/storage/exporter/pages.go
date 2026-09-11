@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/ddvk/rmfakecloud/internal/templates"
+
 	"github.com/ddvk/rmfakecloud/internal/archive"
 	"github.com/ddvk/rmfakecloud/internal/encoding/rm"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -38,6 +40,21 @@ type Page struct {
 	Data []byte
 	// Version is the format of Data.
 	Version RmVersion
+	// Template is the name of the page template the device drew under the
+	// ink, empty for a page that has none.
+	Template string
+}
+
+// TemplateSource hands out page templates by name. A page whose template is
+// not there gets none, which is what every page got before templates were
+// read at all.
+type TemplateSource interface {
+	Template(name string) (*templates.Template, error)
+}
+
+// templateArea is where the device canvas lands on an output page, in points.
+type templateArea struct {
+	X, Y, Width, Height float64
 }
 
 // RenderPages renders pages to a PDF, each page through the renderer its own
@@ -46,7 +63,7 @@ type Page struct {
 // One document can hold more than one format. A notebook started before a
 // device upgrade and continued after it holds both v5 and v6 pages, so the
 // format has to be decided per page rather than per document.
-func RenderPages(pages []Page, payload io.ReadSeeker, output io.Writer) error {
+func RenderPages(pages []Page, payload io.ReadSeeker, source TemplateSource, output io.Writer) error {
 	if len(pages) == 0 {
 		if payload != nil {
 			_, err := io.Copy(output, payload)
@@ -61,7 +78,7 @@ func RenderPages(pages []Page, payload io.ReadSeeker, output io.Writer) error {
 		sizes = nil
 	}
 
-	annotations, err := renderAnnotations(pages, sizes)
+	annotations, err := renderAnnotations(pages, sizes, source)
 	if err != nil {
 		return err
 	}
@@ -163,7 +180,7 @@ func payloadPageSizes(payload io.ReadSeeker) ([]PageSize, error) {
 // renderAnnotations renders every page to a one page PDF and joins them in
 // order. Rendering one page at a time is what lets each page use the renderer
 // its own format needs.
-func renderAnnotations(pages []Page, sizes []PageSize) ([]byte, error) {
+func renderAnnotations(pages []Page, sizes []PageSize, source TemplateSource) ([]byte, error) {
 	rendered := make([]io.ReadSeeker, 0, len(pages))
 	failed := 0
 
@@ -173,13 +190,13 @@ func renderAnnotations(pages []Page, sizes []PageSize) ([]byte, error) {
 			size = sizes[i]
 		}
 
-		pdf, err := renderPage(page, size)
+		pdf, err := renderPage(page, size, source)
 		if err != nil {
 			// One unreadable page must not cost the reader the whole
 			// document, so leave a blank page in its place and carry on.
 			log.Warnf("page %d could not be rendered, leaving it blank: %v", i+1, err)
 			failed++
-			pdf, err = renderPage(Page{}, size)
+			pdf, err = renderPage(Page{}, size, nil)
 			if err != nil {
 				return nil, fmt.Errorf("page %d: %w", i+1, err)
 			}
@@ -206,15 +223,16 @@ func renderAnnotations(pages []Page, sizes []PageSize) ([]byte, error) {
 
 // renderPage renders one page to a one page PDF. A page with no data renders
 // blank, which is what a page the device never wrote should look like.
-func renderPage(page Page, size PageSize) ([]byte, error) {
+func renderPage(page Page, size PageSize, source TemplateSource) ([]byte, error) {
 	if page.Version == VersionV6 && page.Data != nil {
 		buf := &bytes.Buffer{}
 		if err := ExportV6ToPdfNative(page.Data, buf); err != nil {
 			return nil, err
 		}
 		if size.Width <= 0 || size.Height <= 0 {
-			// A notebook: there is nothing to line the ink up with.
-			return buf.Bytes(), nil
+			// A notebook: there is no document to line the ink up with, but
+			// there may be a template to draw under it.
+			return drawOnTemplate(page, buf.Bytes(), source)
 		}
 		return cutV6ToPage(page.Data, buf.Bytes(), size)
 	}
@@ -285,29 +303,21 @@ var viewBoxPattern = regexp.MustCompile(`viewBox="(-?[0-9.]+) (-?[0-9.]+) (-?[0-
 // Ink written beside the page rather than on it is left out. It belongs to no
 // page of the document.
 func cutV6ToPage(rmData, ink []byte, size PageSize) ([]byte, error) {
-	minX, minY, err := v6InkOrigin(rmData)
+	area, inkPage, err := v6Canvas(rmData, ink)
 	if err != nil {
 		log.Warnf("cannot place the ink on the page, leaving it at its own size: %v", err)
 		return ink, nil
 	}
-
-	// Where the canvas sits inside the rendered ink, measured from its top left.
-	canvasX := -deviceCanvasWidth / 2 * devicePointScale
-	canvasX -= minX
-	canvasY := -minY
 
 	// Where the document page sits on the canvas. The device fits the page to
 	// the canvas and centres it.
 	fit := math.Min(deviceCanvasWidth/size.Width, deviceCanvasHeight/size.Height)
 	pageW := size.Width * fit * devicePointScale
 	pageH := size.Height * fit * devicePointScale
-	pageX := canvasX + (deviceCanvasWidth-size.Width*fit)/2*devicePointScale
-	pageY := canvasY + (deviceCanvasHeight-size.Height*fit)/2*devicePointScale
+	pageX := area.X + (deviceCanvasWidth-size.Width*fit)/2*devicePointScale
+	pageY := area.Y + (deviceCanvasHeight-size.Height*fit)/2*devicePointScale
 
-	inkHeight, err := pdfPageHeight(ink)
-	if err != nil {
-		return nil, err
-	}
+	inkHeight := inkPage.Height
 
 	// PDF boxes are measured from the bottom.
 	lowerY := inkHeight - pageY - pageH
@@ -364,16 +374,94 @@ func v6InkOrigin(rmData []byte) (minX, minY float64, err error) {
 	return minX, minY, nil
 }
 
-// pdfPageHeight reads the height of the first page.
-func pdfPageHeight(pdf []byte) (float64, error) {
+// pdfPageSize reads the size of the first page.
+func pdfPageSize(pdf []byte) (PageSize, error) {
 	dims, err := api.PageDims(bytes.NewReader(pdf), model.NewDefaultConfiguration())
 	if err != nil {
-		return 0, err
+		return PageSize{}, err
 	}
 	if len(dims) == 0 {
-		return 0, fmt.Errorf("the rendered ink has no pages")
+		return PageSize{}, fmt.Errorf("the rendered ink has no pages")
 	}
-	return dims[0].Height, nil
+	return PageSize{Width: dims[0].Width, Height: dims[0].Height}, nil
+}
+
+// v6Canvas works out where the device canvas sits inside a rendered ink page,
+// and how big that page is. rmc-go sizes its output from the ink rather than
+// from the canvas, so the canvas can be anywhere inside it.
+func v6Canvas(rmData, ink []byte) (templateArea, PageSize, error) {
+	minX, minY, err := v6InkOrigin(rmData)
+	if err != nil {
+		return templateArea{}, PageSize{}, err
+	}
+
+	page, err := pdfPageSize(ink)
+	if err != nil {
+		return templateArea{}, PageSize{}, err
+	}
+
+	return templateArea{
+		X:      -deviceCanvasWidth/2*devicePointScale - minX,
+		Y:      -minY,
+		Width:  deviceCanvasWidth * devicePointScale,
+		Height: deviceCanvasHeight * devicePointScale,
+	}, page, nil
+}
+
+// drawOnTemplate puts the page template under the ink of a notebook page. The
+// ink keeps its own page, so writing that ran off the template is not lost,
+// and the template covers only the part of it the device page occupies.
+func drawOnTemplate(page Page, ink []byte, source TemplateSource) ([]byte, error) {
+	if source == nil || page.Template == "" {
+		return ink, nil
+	}
+
+	template, err := source.Template(page.Template)
+	if err != nil {
+		log.Warnf("template %q could not be read, leaving the page plain: %v", page.Template, err)
+		return ink, nil
+	}
+	if template == nil {
+		return ink, nil
+	}
+
+	area, inkPage, err := v6Canvas(page.Data, ink)
+	if err != nil {
+		log.Warnf("cannot place template %q, leaving the page plain: %v", page.Template, err)
+		return ink, nil
+	}
+
+	shapes, skippedText, err := template.Shapes(deviceCanvasWidth, deviceCanvasHeight)
+	if err != nil {
+		log.Warnf("template %q could not be drawn, leaving the page plain: %v", page.Template, err)
+		return ink, nil
+	}
+	if skippedText > 0 {
+		log.Debugf("template %q has %d text items, which need the device font", page.Template, skippedText)
+	}
+	if len(shapes) == 0 {
+		return ink, nil
+	}
+
+	background := &bytes.Buffer{}
+	if err := renderTemplate(shapes, inkPage, area, background); err != nil {
+		log.Warnf("template %q could not be drawn, leaving the page plain: %v", page.Template, err)
+		return ink, nil
+	}
+
+	// Both pages are the same size, so laying one on the other lines up.
+	stamp, err := api.PDFWatermarkForReadSeeker(bytes.NewReader(ink), 1,
+		stampDescription, true, false, types.POINTS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare the ink overlay: %w", err)
+	}
+
+	out := &bytes.Buffer{}
+	if err := api.AddWatermarks(bytes.NewReader(background.Bytes()), out, nil, stamp,
+		model.NewDefaultConfiguration()); err != nil {
+		return nil, fmt.Errorf("failed to put the ink on the template: %w", err)
+	}
+	return out.Bytes(), nil
 }
 
 // renderBlankPage makes an empty page of the given size.

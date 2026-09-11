@@ -155,7 +155,7 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 			background = payload
 		}
 
-		if err := exporter.RenderPages(pages, background, writer); err != nil {
+		if err := exporter.RenderPages(pages, background, fs.templateStore(), writer); err != nil {
 			log.Errorf("failed to export doc %s: %v", docid, err)
 			writer.CloseWithError(err)
 			return
@@ -199,11 +199,16 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 	}
 
 	pages := make([]exporter.Page, 0, len(declared))
-	for _, name := range declared {
+	for index, name := range declared {
+		template := ""
+		if index < len(content.PageTemplates) {
+			template = content.PageTemplates[index]
+		}
+
 		hash, ok := hashes[name]
 		if !ok {
 			log.Debugf("page %s has no data, leaving it blank", name)
-			pages = append(pages, exporter.Page{})
+			pages = append(pages, exporter.Page{Template: template})
 			continue
 		}
 
@@ -218,7 +223,7 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 			version = exporter.VersionV5
 		}
 
-		pages = append(pages, exporter.Page{Data: data, Version: version})
+		pages = append(pages, exporter.Page{Data: data, Version: version, Template: template})
 	}
 
 	return pages, nil
