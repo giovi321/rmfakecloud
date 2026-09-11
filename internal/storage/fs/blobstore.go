@@ -829,6 +829,7 @@ func (fs *FileSystemStorage) StoreBlob(uid, id string, stream io.Reader, lastGen
 		err = lock.LockWithTimeout(time.Duration(time.Second * 5))
 		if err != nil {
 			log.Error("cannot obtain lock")
+			return 0, err
 		}
 		defer lock.Unlock()
 
