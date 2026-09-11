@@ -72,3 +72,30 @@ func TestNormalizePages(t *testing.T) {
 		})
 	}
 }
+
+func TestPageTagsFormatVersion2(t *testing.T) {
+	// formatVersion 2 writes objects in pageTags, not the bare strings the
+	// earlier format used. Decoding the whole .content used to fail on this
+	// field, leaving Content half populated.
+	const content = `{"formatVersion":2,"pageTags":[
+		{"name":"todo","pageId":"aaa","timestamp":1699999999},
+		{"name":"idea","pageId":"bbb","timestamp":1700000000}],
+		"cPages":{"pages":[{"id":"aaa"},{"id":"bbb"}]}}`
+
+	var c Content
+	if err := json.Unmarshal([]byte(content), &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(c.Tags) != 2 {
+		t.Fatalf("got %d tags, want 2", len(c.Tags))
+	}
+	if c.Tags[0].Name != "todo" || c.Tags[0].PageID != "aaa" {
+		t.Errorf("tag 0: got %+v", c.Tags[0])
+	}
+
+	c.NormalizePages()
+	if len(c.Pages) != 2 {
+		t.Errorf("got %d pages, want 2", len(c.Pages))
+	}
+}

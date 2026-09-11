@@ -100,6 +100,14 @@ type LWWInt struct {
 	Value int `json:"value"`
 }
 
+// PageTag is one entry of the pageTags list. Devices writing formatVersion 2
+// write objects here, not the bare strings the earlier format used.
+type PageTag struct {
+	Name      string `json:"name"`
+	PageID    string `json:"pageId"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // CPage is one entry of the schema 2 cPages.pages list.
 type CPage struct {
 	ID       string   `json:"id"`
@@ -131,10 +139,10 @@ type Content struct {
 	// file format. Use NormalizePages to read either shape.
 	CPages CPages `json:"cPages"`
 	// Pages is a list of page IDs
-	Pages          []string `json:"pages"`
-	Tags           []string `json:"pageTags"`
-	RedirectionMap []int    `json:"redirectionPageMap"`
-	TextScale      int      `json:"textScale"`
+	Pages          []string  `json:"pages"`
+	Tags           []PageTag `json:"pageTags"`
+	RedirectionMap []int     `json:"redirectionPageMap"`
+	TextScale      int       `json:"textScale"`
 
 	Transform Transform `json:"transform"`
 }
