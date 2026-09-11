@@ -140,11 +140,21 @@ func renderAnnotations(pages []Page, sizes []PageSize) ([]byte, error) {
 		return single, err
 	}
 
+	conf := model.NewDefaultConfiguration()
+
 	joined := &bytes.Buffer{}
-	if err := api.MergeRaw(rendered, joined, false, model.NewDefaultConfiguration()); err != nil {
+	if err := api.MergeRaw(rendered, joined, false, conf); err != nil {
 		return nil, fmt.Errorf("failed to join the rendered pages: %w", err)
 	}
-	return joined.Bytes(), nil
+
+	// Joining nests the page tree one level per page. Past a hundred or so
+	// pages that is deep enough for readers with a depth limit to refuse the
+	// file, so collect the pages back into a flat tree.
+	flat := &bytes.Buffer{}
+	if err := api.Collect(bytes.NewReader(joined.Bytes()), flat, []string{"1-"}, conf); err != nil {
+		return nil, fmt.Errorf("failed to flatten the page tree: %w", err)
+	}
+	return flat.Bytes(), nil
 }
 
 // renderPage renders one page to a one page PDF. A page with no data renders
