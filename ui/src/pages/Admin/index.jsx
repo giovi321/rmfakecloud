@@ -5,8 +5,8 @@ import TemplateList from "./TemplateList";
 
 const Home = () => {
   return (
-    <Container fluid>
-      <Stack>
+    <Container fluid style={{ height: "100%", overflowY: "auto" }}>
+      <Stack className="pb-4">
           <UserList />
           <TemplateList />
       </Stack>
