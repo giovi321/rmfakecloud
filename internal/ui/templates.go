@@ -70,9 +70,9 @@ func (app *ReactAppWrapper) createTemplate(c *gin.Context) {
 			return
 		}
 
-		name := common.Sanitize(file.Filename)
-		if err := app.templates.Add(file.Filename, data); err != nil {
-			log.Warnf("[ui] template %s refused: %v", name, err)
+		name, err := app.templates.Add(file.Filename, data)
+		if err != nil {
+			log.Warnf("[ui] template %s refused: %v", common.Sanitize(file.Filename), err)
 			badReq(c, err.Error())
 			return
 		}

@@ -123,34 +123,45 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
-// Add writes a template into the store, after checking it is one.
-func (s *Store) Add(name string, data []byte) error {
-	name = strings.TrimSpace(strings.TrimSuffix(name, Extension))
+// NameFromFile is the template name a file gets stored under. A browser can
+// send a whole path as the file name, and only the last part of it is a name.
+func NameFromFile(filename string) string {
+	filename = strings.TrimSpace(filename)
+	if cut := strings.LastIndexAny(filename, `/\`); cut >= 0 {
+		filename = filename[cut+1:]
+	}
+	return strings.TrimSpace(strings.TrimSuffix(filename, Extension))
+}
+
+// Add writes a template into the store, after checking it is one. It returns
+// the name it was stored under.
+func (s *Store) Add(filename string, data []byte) (string, error) {
+	name := NameFromFile(filename)
 	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
-		return fmt.Errorf("%q is not a template name", name)
+		return "", fmt.Errorf("%q is not a template name", filename)
 	}
 
 	if _, err := Parse(data); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := os.MkdirAll(s.dir, 0700); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(s.dir, name+Extension), data, 0600); err != nil {
-		return err
+		return "", err
 	}
 
 	s.mu.Lock()
 	delete(s.parsed, name)
 	delete(s.missed, name)
 	s.mu.Unlock()
-	return nil
+	return name, nil
 }
 
 // Remove takes a template out of the store.
 func (s *Store) Remove(name string) error {
-	name = strings.TrimSpace(strings.TrimSuffix(name, Extension))
+	name = NameFromFile(name)
 	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
 		return fmt.Errorf("%q is not a template name", name)
 	}
