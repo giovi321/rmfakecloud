@@ -189,7 +189,13 @@ func (p *PdfGenerator) generateWithBackground(zip *MyArchive, output io.Writer) 
 		return err
 	}
 
-	return stampOnPayload(annotations.Bytes(), bytes.NewReader(p.backgroundPDF), output)
+	stamped, err := stampOnPayload(annotations.Bytes(), bytes.NewReader(p.backgroundPDF))
+	if err != nil {
+		return err
+	}
+
+	_, err = output.Write(stamped)
+	return err
 }
 
 func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, scale, pageHeight float64) error {

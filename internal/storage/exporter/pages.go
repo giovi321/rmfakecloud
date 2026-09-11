@@ -64,7 +64,56 @@ func RenderPages(pages []Page, payload io.ReadSeeker, output io.Writer) error {
 		return err
 	}
 
-	return stampOnPayload(annotations, payload, output)
+	stamped, err := stampOnPayload(annotations, payload)
+	if err != nil {
+		return err
+	}
+
+	if len(pages) <= len(sizes) {
+		_, err = output.Write(stamped)
+		return err
+	}
+
+	// The device lets pages be added past the end of an imported document.
+	// They have nothing to sit on, so they go after it.
+	return appendPagesPastTheEnd(stamped, annotations, len(sizes)+1, output)
+}
+
+// appendPagesPastTheEnd puts the annotation pages from `from` onwards after
+// the stamped document.
+func appendPagesPastTheEnd(stamped, annotations []byte, from int, output io.Writer) error {
+	conf := model.NewDefaultConfiguration()
+
+	past := &bytes.Buffer{}
+	if err := api.Collect(bytes.NewReader(annotations), past, []string{fmt.Sprintf("%d-", from)}, conf); err != nil {
+		return fmt.Errorf("failed to read the pages added past the end of the document: %w", err)
+	}
+
+	joined := &bytes.Buffer{}
+	sources := []io.ReadSeeker{bytes.NewReader(stamped), bytes.NewReader(past.Bytes())}
+	if err := api.MergeRaw(sources, joined, false, conf); err != nil {
+		return fmt.Errorf("failed to append the pages added past the end of the document: %w", err)
+	}
+
+	flat, err := flattenPageTree(joined.Bytes())
+	if err != nil {
+		return err
+	}
+
+	_, err = output.Write(flat)
+	return err
+}
+
+// flattenPageTree rebuilds the page tree. Joining documents nests it one level
+// per document, and past a hundred or so levels readers that cap the depth
+// refuse the file.
+func flattenPageTree(pdf []byte) ([]byte, error) {
+	flat := &bytes.Buffer{}
+	conf := model.NewDefaultConfiguration()
+	if err := api.Collect(bytes.NewReader(pdf), flat, []string{"1-"}, conf); err != nil {
+		return nil, fmt.Errorf("failed to flatten the page tree: %w", err)
+	}
+	return flat.Bytes(), nil
 }
 
 // payloadPageSizes reads the page sizes of the document being annotated.
@@ -140,21 +189,12 @@ func renderAnnotations(pages []Page, sizes []PageSize) ([]byte, error) {
 		return single, err
 	}
 
-	conf := model.NewDefaultConfiguration()
-
 	joined := &bytes.Buffer{}
-	if err := api.MergeRaw(rendered, joined, false, conf); err != nil {
+	if err := api.MergeRaw(rendered, joined, false, model.NewDefaultConfiguration()); err != nil {
 		return nil, fmt.Errorf("failed to join the rendered pages: %w", err)
 	}
 
-	// Joining nests the page tree one level per page. Past a hundred or so
-	// pages that is deep enough for readers with a depth limit to refuse the
-	// file, so collect the pages back into a flat tree.
-	flat := &bytes.Buffer{}
-	if err := api.Collect(bytes.NewReader(joined.Bytes()), flat, []string{"1-"}, conf); err != nil {
-		return nil, fmt.Errorf("failed to flatten the page tree: %w", err)
-	}
-	return flat.Bytes(), nil
+	return flattenPageTree(joined.Bytes())
 }
 
 // renderPage renders one page to a one page PDF. A page with no data renders
@@ -192,19 +232,20 @@ func renderPage(page Page, size PageSize) ([]byte, error) {
 
 // stampOnPayload lays each annotation page over the document page it belongs
 // to, keeping the document itself rather than replacing it with the ink.
-func stampOnPayload(annotations []byte, payload io.ReadSeeker, output io.Writer) error {
+func stampOnPayload(annotations []byte, payload io.ReadSeeker) ([]byte, error) {
 	stamp, err := api.PDFMultiWatermarkForReadSeeker(
 		bytes.NewReader(annotations), 1, 1, stampDescription, true, false, types.POINTS)
 	if err != nil {
-		return fmt.Errorf("failed to prepare the annotation overlay: %w", err)
+		return nil, fmt.Errorf("failed to prepare the annotation overlay: %w", err)
 	}
 
 	if _, err := payload.Seek(0, io.SeekStart); err != nil {
-		return err
+		return nil, err
 	}
 
-	if err := api.AddWatermarks(payload, output, nil, stamp, model.NewDefaultConfiguration()); err != nil {
-		return fmt.Errorf("failed to lay the annotations over the document: %w", err)
+	stamped := &bytes.Buffer{}
+	if err := api.AddWatermarks(payload, stamped, nil, stamp, model.NewDefaultConfiguration()); err != nil {
+		return nil, fmt.Errorf("failed to lay the annotations over the document: %w", err)
 	}
-	return nil
+	return stamped.Bytes(), nil
 }
