@@ -88,6 +88,31 @@ type Layer struct {
 	Name string `json:"name"`
 }
 
+// LWWValue is a last-writer-wins string value, as used by the schema 2 .content
+// format.
+type LWWValue struct {
+	Value string `json:"value"`
+}
+
+// LWWInt is a last-writer-wins integer value, as used by the schema 2 .content
+// format.
+type LWWInt struct {
+	Value int `json:"value"`
+}
+
+// CPage is one entry of the schema 2 cPages.pages list.
+type CPage struct {
+	ID       string   `json:"id"`
+	Template LWWValue `json:"template"`
+	Deleted  *LWWInt  `json:"deleted"`
+}
+
+// CPages is the schema 2 replacement for the flat pages array.
+type CPages struct {
+	Pages      []CPage  `json:"pages"`
+	LastOpened LWWValue `json:"lastOpened"`
+}
+
 // Content represents the structure of a .content json file.
 type Content struct {
 	DummyDocument bool          `json:"dummyDocument"`
@@ -102,6 +127,9 @@ type Content struct {
 	// Orientation can take "portrait" or "landscape".
 	Orientation string `json:"orientation"`
 	PageCount   int    `json:"pageCount"`
+	// CPages is the schema 2 page list, written instead of Pages since the v6
+	// file format. Use NormalizePages to read either shape.
+	CPages CPages `json:"cPages"`
 	// Pages is a list of page IDs
 	Pages          []string `json:"pages"`
 	Tags           []string `json:"pageTags"`
@@ -157,4 +185,27 @@ type MetadataFile struct {
 	Modified         bool   `json:"modified"`
 	Deleted          bool   `json:"deleted"`
 	MetadataModified bool   `json:"metadatamodified"`
+}
+
+// NormalizePages fills Pages from the schema 2 cPages list when the flat pages
+// array is absent. Devices running the v6 file format no longer write the flat
+// array, which leaves consumers falling back to directory order and producing
+// pages in an arbitrary sequence. Pages deleted on the device are skipped.
+func (c *Content) NormalizePages() {
+	if len(c.Pages) > 0 || len(c.CPages.Pages) == 0 {
+		return
+	}
+
+	pages := make([]string, 0, len(c.CPages.Pages))
+	for _, p := range c.CPages.Pages {
+		if p.Deleted != nil && p.Deleted.Value > 0 {
+			continue
+		}
+		pages = append(pages, p.ID)
+	}
+
+	c.Pages = pages
+	if c.PageCount <= 0 {
+		c.PageCount = len(pages)
+	}
 }

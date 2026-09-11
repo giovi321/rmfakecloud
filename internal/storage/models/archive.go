@@ -42,6 +42,7 @@ func ArchiveFromHashDoc(doc *HashDoc, rs RemoteStorage) (*exporter.MyArchive, er
 			if err != nil {
 				return nil, err
 			}
+			a.Content.NormalizePages()
 		case storage.EpubFileExt:
 			fallthrough
 		case storage.PdfFileExt:

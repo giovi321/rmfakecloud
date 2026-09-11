@@ -83,6 +83,7 @@ func (z *Zip) readContent(zr *zip.Reader) error {
 	if err = json.Unmarshal(bytes, &z.Content); err != nil {
 		return err
 	}
+	z.Content.NormalizePages()
 	p := contentFile.FileInfo().Name()
 	id := docPathToName(p)
 	z.UUID = id

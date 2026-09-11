@@ -182,6 +182,7 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 						if err != nil {
 							log.Warnf("Failed to unmarshal content.json: %v", err)
 						}
+						contentData.NormalizePages()
 					}
 					break
 				}
