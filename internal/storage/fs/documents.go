@@ -182,14 +182,14 @@ func (fs *FileSystemStorage) RemoveDocument(uid, id string) error {
 	log.Info(trashDir)
 	meta := sanitizedID + storage.MetadataFileExt
 	fullPath := fs.getPathFromUser(uid, meta)
-	err = os.Rename(fullPath, filepath.Join(trashDir, meta))
+	err = os.Rename(fullPath, filepath.Join(trashDir, sanitizeFileName(meta)))
 	if err != nil {
 		return err
 	}
 
 	zipfile := sanitizedID + storage.ZipFileExt
 	fullPath = fs.getPathFromUser(uid, zipfile)
-	err = os.Rename(fullPath, filepath.Join(trashDir, zipfile))
+	err = os.Rename(fullPath, filepath.Join(trashDir, sanitizeFileName(zipfile)))
 	if err != nil {
 		return err
 	}
