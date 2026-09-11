@@ -198,6 +198,8 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 		}
 	}
 
+	landscape := strings.EqualFold(strings.TrimSpace(content.Orientation), "landscape")
+
 	pages := make([]exporter.Page, 0, len(declared))
 	for index, name := range declared {
 		template := ""
@@ -208,7 +210,7 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 		hash, ok := hashes[name]
 		if !ok {
 			log.Debugf("page %s has no data, leaving it blank", name)
-			pages = append(pages, exporter.Page{Template: template})
+			pages = append(pages, exporter.Page{Template: template, Landscape: landscape})
 			continue
 		}
 
@@ -223,7 +225,12 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 			version = exporter.VersionV5
 		}
 
-		pages = append(pages, exporter.Page{Data: data, Version: version, Template: template})
+		pages = append(pages, exporter.Page{
+			Data:      data,
+			Version:   version,
+			Template:  template,
+			Landscape: landscape,
+		})
 	}
 
 	return pages, nil

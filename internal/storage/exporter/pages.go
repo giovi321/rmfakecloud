@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math"
 	"regexp"
 	"strconv"
 
@@ -43,6 +42,9 @@ type Page struct {
 	// Template is the name of the page template the device drew under the
 	// ink, empty for a page that has none.
 	Template string
+	// Landscape says the device held this document sideways, which turns its
+	// canvas on its side and so changes where the page sits on it.
+	Landscape bool
 }
 
 // TemplateSource hands out page templates by name. A page whose template is
@@ -55,6 +57,15 @@ type TemplateSource interface {
 // templateArea is where the device canvas lands on an output page, in points.
 type templateArea struct {
 	X, Y, Width, Height float64
+}
+
+// deviceCanvas is the writing area of the device, in its own pixels. Holding a
+// document sideways turns it on its side.
+func deviceCanvas(landscape bool) (width, height float64) {
+	if landscape {
+		return deviceCanvasHeight, deviceCanvasWidth
+	}
+	return deviceCanvasWidth, deviceCanvasHeight
 }
 
 // RenderPages renders pages to a PDF, each page through the renderer its own
@@ -234,7 +245,7 @@ func renderPage(page Page, size PageSize, source TemplateSource) ([]byte, error)
 			// there may be a template to draw under it.
 			return drawOnTemplate(page, buf.Bytes(), source)
 		}
-		return cutV6ToPage(page.Data, buf.Bytes(), size)
+		return cutV6ToPage(page, buf.Bytes(), size)
 	}
 
 	single := &MyArchive{Zip: archive.Zip{Pages: []archive.Page{{}}}}
@@ -302,55 +313,54 @@ var viewBoxPattern = regexp.MustCompile(`viewBox="(-?[0-9.]+) (-?[0-9.]+) (-?[0-
 //
 // Ink written beside the page rather than on it is left out. It belongs to no
 // page of the document.
-func cutV6ToPage(rmData, ink []byte, size PageSize) ([]byte, error) {
-	area, inkPage, err := v6Canvas(rmData, ink)
+func cutV6ToPage(page Page, ink []byte, size PageSize) ([]byte, error) {
+	minX, minY, err := v6InkOrigin(page.Data)
 	if err != nil {
 		log.Warnf("cannot place the ink on the page, leaving it at its own size: %v", err)
 		return ink, nil
 	}
 
-	// Where the document page sits on the canvas. The device fits the page to
-	// the canvas and centres it.
-	fit := math.Min(deviceCanvasWidth/size.Width, deviceCanvasHeight/size.Height)
-	pageW := size.Width * fit * devicePointScale
-	pageH := size.Height * fit * devicePointScale
-	pageX := area.X + (deviceCanvasWidth-size.Width*fit)/2*devicePointScale
-	pageY := area.Y + (deviceCanvasHeight-size.Height*fit)/2*devicePointScale
+	// Where the document page sits in the device's own coordinates. The ink
+	// is already at the page's own scale, one device pixel to 72/226 of a
+	// point, so nothing is scaled: the page only has to be found.
+	//
+	// The page's top left corner sits at the origin the ink is written
+	// around: centred across, and at the top going down. Measured against a
+	// page the tablet exported itself, the horizontal origin came out at
+	// 480.7pt against a page half width of 480.
+	pageLeft := -size.Width / devicePointScale / 2
+	pageTop := 0.0
 
-	inkHeight := inkPage.Height
+	// The same point in the rendered ink, measured from its top left corner.
+	inkX := pageLeft*devicePointScale - minX
+	inkY := pageTop*devicePointScale - minY
 
-	// PDF boxes are measured from the bottom.
-	lowerY := inkHeight - pageY - pageH
-	boxDefinition := fmt.Sprintf("[%.2f %.2f %.2f %.2f]", pageX, lowerY, pageX+pageW, lowerY+pageH)
-	box, err := api.Box(boxDefinition, types.POINTS)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe the page area of the ink: %w", err)
-	}
-
-	conf := model.NewDefaultConfiguration()
-	cut := &bytes.Buffer{}
-	if err := api.Crop(bytes.NewReader(ink), cut, nil, box, conf); err != nil {
-		return nil, fmt.Errorf("failed to cut the ink to the page: %w", err)
-	}
+	// pdfcpu lines corners up and its offsets run right and up, so shifting by
+	// where the page starts brings the page's own corner to the corner of the
+	// output. Ink beyond the page lands off it rather than being cut away.
+	description := fmt.Sprintf(
+		"position:tl, offset:%.4f %.4f, scalefactor:1 abs, rotation:0, opacity:1",
+		-inkX, inkY)
 
 	blank, err := renderBlankPage(size)
 	if err != nil {
 		return nil, err
 	}
 
-	// The cut is the same shape as the page, so fitting it is exact.
-	stamp, err := api.PDFWatermarkForReadSeeker(bytes.NewReader(cut.Bytes()), 1,
-		fitDescription, true, false, types.POINTS)
+	stamp, err := api.PDFWatermarkForReadSeeker(bytes.NewReader(ink), 1,
+		description, true, false, types.POINTS)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare the ink overlay: %w", err)
 	}
 
 	out := &bytes.Buffer{}
-	if err := api.AddWatermarks(bytes.NewReader(blank), out, nil, stamp, conf); err != nil {
+	if err := api.AddWatermarks(bytes.NewReader(blank), out, nil, stamp,
+		model.NewDefaultConfiguration()); err != nil {
 		return nil, fmt.Errorf("failed to put the ink on the page: %w", err)
 	}
 	return out.Bytes(), nil
 }
+
 
 // v6InkOrigin reads the top left corner of the rendered ink in its own
 // coordinates, from the viewBox of the SVG rmc-go writes for the same page.
@@ -389,7 +399,7 @@ func pdfPageSize(pdf []byte) (PageSize, error) {
 // v6Canvas works out where the device canvas sits inside a rendered ink page,
 // and how big that page is. rmc-go sizes its output from the ink rather than
 // from the canvas, so the canvas can be anywhere inside it.
-func v6Canvas(rmData, ink []byte) (templateArea, PageSize, error) {
+func v6Canvas(rmData, ink []byte, canvasWidth, canvasHeight float64) (templateArea, PageSize, error) {
 	minX, minY, err := v6InkOrigin(rmData)
 	if err != nil {
 		return templateArea{}, PageSize{}, err
@@ -401,10 +411,10 @@ func v6Canvas(rmData, ink []byte) (templateArea, PageSize, error) {
 	}
 
 	return templateArea{
-		X:      -deviceCanvasWidth/2*devicePointScale - minX,
+		X:      -canvasWidth/2*devicePointScale - minX,
 		Y:      -minY,
-		Width:  deviceCanvasWidth * devicePointScale,
-		Height: deviceCanvasHeight * devicePointScale,
+		Width:  canvasWidth * devicePointScale,
+		Height: canvasHeight * devicePointScale,
 	}, page, nil
 }
 
@@ -430,13 +440,14 @@ func drawOnTemplate(page Page, ink []byte, source TemplateSource) ([]byte, error
 
 	log.Debugf("drawing template %q", page.Template)
 
-	area, inkPage, err := v6Canvas(page.Data, ink)
+	canvasWidth, canvasHeight := deviceCanvas(page.Landscape)
+	area, inkPage, err := v6Canvas(page.Data, ink, canvasWidth, canvasHeight)
 	if err != nil {
 		log.Warnf("cannot place template %q, leaving the page plain: %v", page.Template, err)
 		return ink, nil
 	}
 
-	shapes, skippedText, err := template.Shapes(deviceCanvasWidth, deviceCanvasHeight)
+	shapes, skippedText, err := template.Shapes(canvasWidth, canvasHeight)
 	if err != nil {
 		log.Warnf("template %q could not be drawn, leaving the page plain: %v", page.Template, err)
 		return ink, nil
