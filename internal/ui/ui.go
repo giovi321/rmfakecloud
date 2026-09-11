@@ -14,6 +14,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/messages"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
 	"github.com/ddvk/rmfakecloud/internal/storage"
+	"github.com/ddvk/rmfakecloud/internal/templates"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	webui "github.com/ddvk/rmfakecloud/ui"
@@ -77,6 +78,7 @@ type ReactAppWrapper struct {
 	backends      map[common.SyncVersion]backend
 	roomManager   *screenshare.RoomManager
 	mqtt          mqttBridge
+	templates     *templates.Store
 }
 
 // hack for serving index.html on /
@@ -110,6 +112,7 @@ func New(cfg *config.Config,
 		fs:            common.NewLastModifiedFS(http.FS(sub), time.Now()),
 		prefix:        "/assets",
 		cfg:           cfg,
+		templates:     templates.NewStore(cfg.TemplatesDir),
 		userStorer:    userStorer,
 		codeConnector: codeConnector,
 		h:             h,

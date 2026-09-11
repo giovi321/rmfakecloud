@@ -25,6 +25,7 @@ const (
 	browserIDContextKey = "browserID"
 	isSync15Key         = "sync15"
 	docIDParam          = "docid"
+	templateNameParam   = "templatename"
 	intIDParam          = "intid"
 	uiLogger            = "[ui] "
 	ui10                = " [10] "

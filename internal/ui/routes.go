@@ -101,4 +101,10 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	admin.PUT("users", app.updateUser)
 	admin.POST("users", app.createUser)
 	admin.GET("users", app.getAppUsers)
+
+	// Page templates. A template has to be installed on the tablet as well:
+	// the device never asks the server for one, it only reports which it drew.
+	admin.GET("templates", app.listTemplates)
+	admin.POST("templates", app.createTemplate)
+	admin.DELETE("templates/:"+templateNameParam, app.deleteTemplate)
 }

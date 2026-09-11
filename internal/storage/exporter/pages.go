@@ -422,8 +422,13 @@ func drawOnTemplate(page Page, ink []byte, source TemplateSource) ([]byte, error
 		return ink, nil
 	}
 	if template == nil {
+		if page.Template != templates.Blank {
+			log.Debugf("no template file for %q, the page stays plain", page.Template)
+		}
 		return ink, nil
 	}
+
+	log.Debugf("drawing template %q", page.Template)
 
 	area, inkPage, err := v6Canvas(page.Data, ink)
 	if err != nil {

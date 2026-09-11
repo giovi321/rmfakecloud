@@ -141,7 +141,7 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 		return nil, err
 	}
 
-	log.Debugf("exporting %d pages of doc %s", len(pages), docid)
+	log.Debugf("exporting %d pages of doc %s, templates %v", len(pages), docid, pageTemplates(pages))
 
 	reader, writer := io.Pipe()
 
@@ -227,6 +227,19 @@ func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, e
 	}
 
 	return pages, nil
+}
+
+// pageTemplates counts the templates a document's pages ask for, for the log.
+func pageTemplates(pages []exporter.Page) map[string]int {
+	counts := make(map[string]int)
+	for _, page := range pages {
+		name := page.Template
+		if name == "" {
+			name = "(none)"
+		}
+		counts[name]++
+	}
+	return counts
 }
 
 // blobContent reads and normalizes the content file of a blob document.
