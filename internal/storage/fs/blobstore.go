@@ -131,166 +131,151 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 	}
 	ls := fs.BlobStorage(uid)
 
-	// Detect version BEFORE trying to load archive
-	// This is crucial because v6 files can't be unmarshaled by rmapi
-	version := exporter.VersionUnknown
-	var firstRmHash string
-
-	// Find first .rm file in doc
-	for _, f := range doc.Files {
-		if filepath.Ext(f.EntryName) == storage.RmFileExt {
-			firstRmHash = f.Hash
-			break
-		}
+	pages, err := blobPages(doc, ls)
+	if err != nil {
+		return nil, err
 	}
 
-	// Detect version from raw .rm blob
-	if firstRmHash != "" {
-		reader, err := ls.GetReader(firstRmHash)
-		if err == nil {
-			defer reader.Close()
-			// Read just enough for version detection
-			header := make([]byte, 43)
-			n, err := reader.Read(header)
-			if err == nil || err == io.EOF {
-				version, _ = exporter.DetectRmVersionFromBytes(header[:n])
-			}
-		}
+	payload, err := blobPayload(doc, ls)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Debugf("Detected format %s for blob doc %s", version.String(), docid)
+	log.Debugf("exporting %d pages of doc %s", len(pages), docid)
 
 	reader, writer := io.Pipe()
 
-	// Route to appropriate renderer
-	if version == exporter.VersionV6 {
-		log.Infof("Using native rmc-go for v6 format blob doc %s", docid)
+	go func() {
+		if payload != nil {
+			defer payload.Close()
+		}
 
-		go func() {
-			defer writer.Close()
+		var background io.ReadSeeker
+		if payload != nil {
+			background = payload
+		}
 
-			// Extract .rm files directly from blob storage without parsing
-			// First, get content.json to know page order
-			var contentData archive.Content
-			for _, f := range doc.Files {
-				if filepath.Ext(f.EntryName) == storage.ContentFileExt {
-					blob, err := ls.GetReader(f.Hash)
-					if err == nil {
-						contentBytes, _ := io.ReadAll(blob)
-						blob.Close()
-						err = json.Unmarshal(contentBytes, &contentData)
-						if err != nil {
-							log.Warnf("Failed to unmarshal content.json: %v", err)
-						}
-						contentData.NormalizePages()
-					}
-					break
-				}
-			}
+		if err := exporter.RenderPages(pages, background, writer); err != nil {
+			log.Errorf("failed to export doc %s: %v", docid, err)
+			writer.CloseWithError(err)
+			return
+		}
+		writer.Close()
+	}()
 
-			log.Debugf("Content has %d pages", len(contentData.Pages))
+	return reader, nil
+}
 
-			// Build map of page names to hashes
-			pageMap := make(map[string]string)
-			for _, f := range doc.Files {
-				if filepath.Ext(f.EntryName) == storage.RmFileExt {
-					name := strings.TrimSuffix(filepath.Base(f.EntryName), storage.RmFileExt)
-					pageMap[name] = f.Hash
-					log.Debugf("Found .rm file: %s -> %s", name, f.Hash)
-				}
-			}
+// blobPages lists the pages of a blob document in the order its content file
+// declares, each with its own format. A page the content file lists but that
+// has no .rm blob is kept without data: the device leaves one out for a page
+// nobody drew on, and dropping it would renumber every page after it.
+func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, error) {
+	content, err := blobContent(doc, ls)
+	if err != nil {
+		return nil, err
+	}
 
-			log.Debugf("Built page map with %d entries", len(pageMap))
+	hashes := make(map[string]string)
+	var fileOrder []string
+	for _, f := range doc.Files {
+		if filepath.Ext(f.EntryName) != storage.RmFileExt {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(f.EntryName), storage.RmFileExt)
+		hashes[name] = f.Hash
+		fileOrder = append(fileOrder, name)
+	}
 
-			// Extract all pages in order
-			var pageHashes []string
-			if len(contentData.Pages) > 0 {
-				// Use pages from content.json in the correct order
-				for _, pageName := range contentData.Pages {
-					if hash, ok := pageMap[pageName]; ok {
-						pageHashes = append(pageHashes, hash)
-						log.Debugf("Found page %s -> %s", pageName, hash)
-					} else {
-						log.Warnf("Page %s not found in pageMap", pageName)
-					}
-				}
-			} else {
-				// No pages in content.json, use order from doc.Files (index file order)
-				// doc.Files is sorted alphabetically which reverses page order, so we reverse it back
-				log.Warn("content.json has no pages array, using .rm files in reversed index order")
-				var tempHashes []string
-				for _, f := range doc.Files {
-					if filepath.Ext(f.EntryName) == storage.RmFileExt {
-						tempHashes = append(tempHashes, f.Hash)
-					}
-				}
-				// Reverse the order to get correct page sequence
-				for i := len(tempHashes) - 1; i >= 0; i-- {
-					pageHashes = append(pageHashes, tempHashes[i])
-					log.Infof("Using .rm file in reversed order: page %d", len(tempHashes)-i)
-				}
-			}
+	declared := content.Pages
+	if len(declared) == 0 && len(fileOrder) > 0 {
+		// No page list to go by. The index is sorted by entry name, which
+		// runs opposite to page order, so read it back to front.
+		log.Warn("the content file lists no pages, falling back to the index order")
+		declared = make([]string, 0, len(fileOrder))
+		for i := len(fileOrder) - 1; i >= 0; i-- {
+			declared = append(declared, fileOrder[i])
+		}
+	}
 
-			if len(pageHashes) == 0 {
-				log.Error("No pages found in v6 document")
-				log.Debugf("Doc files: %+v", doc.Files)
-				writer.CloseWithError(fmt.Errorf("no pages found"))
-				return
-			}
+	pages := make([]exporter.Page, 0, len(declared))
+	for _, name := range declared {
+		hash, ok := hashes[name]
+		if !ok {
+			log.Debugf("page %s has no data, leaving it blank", name)
+			pages = append(pages, exporter.Page{})
+			continue
+		}
 
-			log.Infof("Exporting %d v6 pages", len(pageHashes))
-
-			// Read all pages into memory
-			var pages [][]byte
-			for i, pageHash := range pageHashes {
-				rmReader, err := ls.GetReader(pageHash)
-				if err != nil {
-					log.Errorf("Failed to get v6 page %d data: %v", i, err)
-					writer.CloseWithError(err)
-					return
-				}
-
-				rmData, err := io.ReadAll(rmReader)
-				rmReader.Close()
-				if err != nil {
-					log.Errorf("Failed to read v6 page %d data: %v", i, err)
-					writer.CloseWithError(err)
-					return
-				}
-
-				pages = append(pages, rmData)
-			}
-
-			// Use rmc-go library for multipage export (in-process, Cairo renderer)
-			err = exporter.ExportV6MultiPageToPdfNative(pages, writer)
-			if err != nil {
-				log.Errorf("Failed to export v6 multipage with rmc-go: %v", err)
-				writer.CloseWithError(err)
-				return
-			}
-		}()
-	} else {
-		// Use existing v5 rendering
-		log.Debugf("Using Cairo PDF renderer for v5 format blob doc %s", docid)
-
-		archive, err := models.ArchiveFromHashDoc(doc, ls)
+		data, err := readBlob(ls, hash)
 		if err != nil {
-			log.Error("Failed to load v5 archive:", err)
 			return nil, err
 		}
 
-		go func() {
-			err = exporter.RenderPDF(archive, writer)
-			if err != nil {
-				log.Error(err)
-				writer.Close()
-				return
-			}
-			writer.Close()
-		}()
+		version, err := exporter.DetectRmVersionFromBytes(data)
+		if err != nil {
+			log.Warnf("page %s has an unknown format, treating it as v5: %v", name, err)
+			version = exporter.VersionV5
+		}
+
+		pages = append(pages, exporter.Page{Data: data, Version: version})
 	}
 
-	return reader, err
+	return pages, nil
+}
+
+// blobContent reads and normalizes the content file of a blob document.
+func blobContent(doc *models.HashDoc, ls models.RemoteStorage) (content archive.Content, err error) {
+	for _, f := range doc.Files {
+		if filepath.Ext(f.EntryName) != storage.ContentFileExt {
+			continue
+		}
+
+		contentBytes, err := readBlob(ls, f.Hash)
+		if err != nil {
+			return content, err
+		}
+
+		if err := json.Unmarshal(contentBytes, &content); err != nil {
+			// Keep going: what was decoded before the failure is still
+			// usable, and an unreadable field should not cost the export.
+			log.Warnf("failed to read the content file: %v", err)
+		}
+		content.NormalizePages()
+		break
+	}
+	return content, nil
+}
+
+// blobPayload opens the pdf or epub a document was made from, or returns nil
+// for a plain notebook.
+func blobPayload(doc *models.HashDoc, ls models.RemoteStorage) (io.ReadSeekCloser, error) {
+	for _, f := range doc.Files {
+		switch filepath.Ext(f.EntryName) {
+		case storage.PdfFileExt, storage.EpubFileExt:
+			blob, err := ls.GetReader(f.Hash)
+			if err != nil {
+				return nil, err
+			}
+			payload, ok := blob.(io.ReadSeekCloser)
+			if !ok {
+				blob.Close()
+				return nil, fmt.Errorf("the payload of %s cannot be seeked", doc.EntryName)
+			}
+			return payload, nil
+		}
+	}
+	return nil, nil
+}
+
+// readBlob reads a whole blob.
+func readBlob(ls models.RemoteStorage, hash string) ([]byte, error) {
+	blob, err := ls.GetReader(hash)
+	if err != nil {
+		return nil, err
+	}
+	defer blob.Close()
+	return io.ReadAll(blob)
 }
 
 // UpdateBlobDocument updates metadata
