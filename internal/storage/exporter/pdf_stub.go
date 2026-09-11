@@ -20,6 +20,7 @@ type PdfGeneratorOptions struct {
 	AddPageNumbers  bool
 	AllPages        bool
 	AnnotationsOnly bool
+	PageSizes       []PageSize
 }
 
 func (p *PdfGenerator) Generate(zip *MyArchive, output io.Writer, options PdfGeneratorOptions) error {

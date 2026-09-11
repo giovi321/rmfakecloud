@@ -42,6 +42,22 @@ type PdfGeneratorOptions struct {
 	AddPageNumbers  bool
 	AllPages        bool
 	AnnotationsOnly bool //export the annotations without the background/pdf
+	// PageSizes is the size of each output page, indexed by page. Pages past
+	// the end of the slice, and entries that are not positive, fall back to
+	// the device page size. Set it to the page sizes of the document being
+	// annotated so the annotations line up with it.
+	PageSizes []PageSize
+}
+
+// pageSize is the output size of page index, in PDF points.
+func (p *PdfGenerator) pageSize(index int) (width, height float64) {
+	if index < len(p.options.PageSizes) {
+		size := p.options.PageSizes[index]
+		if size.Width > 0 && size.Height > 0 {
+			return size.Width, size.Height
+		}
+	}
+	return rmPageSize.Width, rmPageSize.Height
 }
 
 func normalized(p1 rm.Point, scale float64) (float64, float64) {
@@ -89,20 +105,14 @@ func (p *PdfGenerator) generateAnnotationsOnly(zip *MyArchive, output io.Writer)
 	defer os.Remove(tmpPath)
 
 	// Determine first page dimensions
-	var firstWidth, firstHeight float64
-	if p.template {
-		firstWidth, firstHeight = rmPageSize.Width, rmPageSize.Height
-	} else {
-		// TODO: Get dimensions from background PDF
-		firstWidth, firstHeight = rmPageSize.Width, rmPageSize.Height
-	}
+	firstWidth, firstHeight := p.pageSize(0)
 
 	// Create PDF surface
 	pdfSurface := cairo.NewPDFSurface(tmpPath, firstWidth, firstHeight, cairo.PDF_VERSION_1_5)
 	defer pdfSurface.Finish()
 
 	pageCount := 0
-	for _, pageAnnotations := range zip.Pages {
+	for index, pageAnnotations := range zip.Pages {
 		hasContent := pageAnnotations.Data != nil
 
 		// Skip pages without content unless AllPages is set
@@ -112,21 +122,14 @@ func (p *PdfGenerator) generateAnnotationsOnly(zip *MyArchive, output io.Writer)
 
 		pageCount++
 
+		pageWidth, pageHeight := p.pageSize(index)
+
 		// Set page size (for pages after the first)
 		if pageCount > 1 {
-			var pageWidth, pageHeight float64
-			if p.template {
-				pageWidth, pageHeight = rmPageSize.Width, rmPageSize.Height
-			} else {
-				// TODO: Get dimensions from background PDF page
-				pageWidth, pageHeight = rmPageSize.Width, rmPageSize.Height
-			}
 			setPDFPageSize(pdfSurface, pageWidth, pageHeight)
 		}
 
 		// Calculate scale
-		pageWidth := firstWidth
-		pageHeight := firstHeight
 		ratio := pageHeight / pageWidth
 
 		var scale float64
@@ -168,85 +171,25 @@ func (p *PdfGenerator) generateAnnotationsOnly(zip *MyArchive, output io.Writer)
 }
 
 func (p *PdfGenerator) generateWithBackground(zip *MyArchive, output io.Writer) error {
-	// Step 1: Create annotations-only PDF
-	tmpAnnotations, err := os.CreateTemp("", "rmfakecloud-annotations-*.pdf")
+	// Render the annotation pages at the size of the pages they go over.
+	// Anything else and the ink lands in the wrong place.
+	dims, err := api.PageDims(bytes.NewReader(p.backgroundPDF), model.NewDefaultConfiguration())
 	if err != nil {
-		return fmt.Errorf("failed to create temp annotations file: %w", err)
+		return fmt.Errorf("failed to read the page sizes of the document: %w", err)
 	}
-	tmpAnnotationsPath := tmpAnnotations.Name()
-	tmpAnnotations.Close()
-	defer os.Remove(tmpAnnotationsPath)
 
-	// Generate annotations PDF to temp file
-	annotationsFile, err := os.Create(tmpAnnotationsPath)
-	if err != nil {
-		return fmt.Errorf("failed to create annotations file: %w", err)
+	sizes := make([]PageSize, len(dims))
+	for i, dim := range dims {
+		sizes[i] = PageSize{Width: dim.Width, Height: dim.Height}
 	}
-	if err := p.generateAnnotationsOnly(zip, annotationsFile); err != nil {
-		annotationsFile.Close()
+	p.options.PageSizes = sizes
+
+	annotations := &bytes.Buffer{}
+	if err := p.generateAnnotationsOnly(zip, annotations); err != nil {
 		return err
 	}
-	annotationsFile.Close()
 
-	// Step 2: Write background PDF to temp file
-	tmpBackground, err := os.CreateTemp("", "rmfakecloud-background-*.pdf")
-	if err != nil {
-		return fmt.Errorf("failed to create temp background file: %w", err)
-	}
-	tmpBackgroundPath := tmpBackground.Name()
-	if _, err := tmpBackground.Write(p.backgroundPDF); err != nil {
-		tmpBackground.Close()
-		os.Remove(tmpBackgroundPath)
-		return fmt.Errorf("failed to write background PDF: %w", err)
-	}
-	tmpBackground.Close()
-	defer os.Remove(tmpBackgroundPath)
-
-	// Step 3: Merge background and annotations using pdfcpu
-	tmpOutput, err := os.CreateTemp("", "rmfakecloud-merged-*.pdf")
-	if err != nil {
-		return fmt.Errorf("failed to create temp output file: %w", err)
-	}
-	tmpOutputPath := tmpOutput.Name()
-	tmpOutput.Close()
-	defer os.Remove(tmpOutputPath)
-
-	outFile, err := os.Create(tmpOutputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer outFile.Close()
-
-	// Open both PDFs as ReadSeekers
-	bgFile, err := os.Open(tmpBackgroundPath)
-	if err != nil {
-		return fmt.Errorf("failed to open background PDF: %w", err)
-	}
-	defer bgFile.Close()
-
-	annFile, err := os.Open(tmpAnnotationsPath)
-	if err != nil {
-		return fmt.Errorf("failed to open annotations PDF: %w", err)
-	}
-	defer annFile.Close()
-
-	// Merge: background first, then overlay annotations
-	conf := model.NewDefaultConfiguration()
-	rsc := []io.ReadSeeker{bgFile, annFile}
-	if err := api.MergeRaw(rsc, outFile, false, conf); err != nil {
-		return fmt.Errorf("failed to merge PDFs: %w", err)
-	}
-	outFile.Close()
-
-	// Copy merged result to output
-	mergedFile, err := os.Open(tmpOutputPath)
-	if err != nil {
-		return fmt.Errorf("failed to open merged file: %w", err)
-	}
-	defer mergedFile.Close()
-
-	_, err = io.Copy(output, mergedFile)
-	return err
+	return stampOnPayload(annotations.Bytes(), bytes.NewReader(p.backgroundPDF), output)
 }
 
 func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, scale, pageHeight float64) error {
