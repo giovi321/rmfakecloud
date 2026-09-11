@@ -60,8 +60,41 @@ func (p *PdfGenerator) pageSize(index int) (width, height float64) {
 	return rmPageSize.Width, rmPageSize.Height
 }
 
-func normalized(p1 rm.Point, scale float64) (float64, float64) {
-	return float64(p1.X) * scale, float64(p1.Y) * scale
+// pageTransform maps a point of ink onto the page, in surface coordinates.
+//
+// A landscape page does not fit a portrait screen the right way up, so the
+// device turns it a quarter turn: the page's width then runs along the long
+// side of the screen and the ink is written turned with it. Checked against a
+// page the tablet exported itself, where this puts the ink within a fraction
+// of a percent of where the tablet has it.
+type pageTransform struct {
+	scale      float64
+	pageHeight float64
+	turned     bool
+}
+
+func (t pageTransform) apply(point rm.Point) (x, y float64) {
+	if t.turned {
+		return (DeviceHeight - float64(point.Y)) * t.scale, float64(point.X) * t.scale
+	}
+	return float64(point.X) * t.scale, t.pageHeight - float64(point.Y)*t.scale
+}
+
+// transformFor works out how the ink of a page this size is laid onto it.
+func transformFor(pageWidth, pageHeight float64) pageTransform {
+	if pageWidth > pageHeight {
+		return pageTransform{
+			scale:      pageWidth / DeviceHeight,
+			pageHeight: pageHeight,
+			turned:     true,
+		}
+	}
+
+	scale := pageHeight / DeviceHeight
+	if pageHeight/pageWidth < 1.33 {
+		scale = pageWidth / DeviceWidth
+	}
+	return pageTransform{scale: scale, pageHeight: pageHeight}
 }
 
 // setPDFPageSize sets the size for the current page in a PDF surface
@@ -129,19 +162,11 @@ func (p *PdfGenerator) generateAnnotationsOnly(zip *MyArchive, output io.Writer)
 			setPDFPageSize(pdfSurface, pageWidth, pageHeight)
 		}
 
-		// Calculate scale
-		ratio := pageHeight / pageWidth
-
-		var scale float64
-		if ratio < 1.33 {
-			scale = pageWidth / DeviceWidth
-		} else {
-			scale = pageHeight / DeviceHeight
-		}
+		transform := transformFor(pageWidth, pageHeight)
 
 		// Draw annotations if present
 		if hasContent {
-			if err := p.drawAnnotations(pdfSurface, pageAnnotations.Data, scale, pageHeight); err != nil {
+			if err := p.drawAnnotations(pdfSurface, pageAnnotations.Data, transform); err != nil {
 				return err
 			}
 		}
@@ -198,7 +223,7 @@ func (p *PdfGenerator) generateWithBackground(zip *MyArchive, output io.Writer) 
 	return err
 }
 
-func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, scale, pageHeight float64) error {
+func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, transform pageTransform) error {
 	surface.Save()
 	defer surface.Restore()
 
@@ -213,10 +238,10 @@ func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, sc
 
 			if line.BrushType == rm.HighlighterV5 {
 				// Draw highlighter as semi-transparent rectangle
-				p.drawHighlighter(surface, line, scale, pageHeight)
+				p.drawHighlighter(surface, line, transform)
 			} else {
 				// Draw regular stroke
-				p.drawStroke(surface, line, scale, pageHeight)
+				p.drawStroke(surface, line, transform)
 			}
 		}
 	}
@@ -224,33 +249,36 @@ func (p *PdfGenerator) drawAnnotations(surface *cairo.Surface, rmData *rm.Rm, sc
 	return nil
 }
 
-func (p *PdfGenerator) drawHighlighter(surface *cairo.Surface, line rm.Line, scale, pageHeight float64) {
+func (p *PdfGenerator) drawHighlighter(surface *cairo.Surface, line rm.Line, transform pageTransform) {
 	if len(line.Points) < 2 {
 		return
 	}
 
 	last := len(line.Points) - 1
-	x1, y1 := normalized(line.Points[0], scale)
-	x2, _ := normalized(line.Points[last], scale)
+	x1, y1 := transform.apply(line.Points[0])
+	x2, y2 := transform.apply(line.Points[last])
 
-	// Highlighter width
-	width := scale * 30
-	y1 += width / 2
+	width := transform.scale * 30
 
-	// Convert Y coordinate (Cairo origin is top-left, PDF is bottom-left)
-	y := pageHeight - y1
+	// A highlighter stroke is one straight swipe, so it is drawn flat along
+	// whichever way the page runs.
+	if transform.turned {
+		x2 = x1
+	} else {
+		y2 = y1
+	}
 
 	// Yellow color with 50% opacity
 	surface.SetSourceRGBA(1.0, 1.0, 0.0, 0.5)
 	surface.SetLineWidth(width)
 	surface.SetLineCap(cairo.LINE_CAP_BUTT)
 
-	surface.MoveTo(x1, y)
-	surface.LineTo(x2, y)
+	surface.MoveTo(x1, y1)
+	surface.LineTo(x2, y2)
 	surface.Stroke()
 }
 
-func (p *PdfGenerator) drawStroke(surface *cairo.Surface, line rm.Line, scale, pageHeight float64) {
+func (p *PdfGenerator) drawStroke(surface *cairo.Surface, line rm.Line, transform pageTransform) {
 	if len(line.Points) < 1 {
 		return
 	}
@@ -283,9 +311,7 @@ func (p *PdfGenerator) drawStroke(surface *cairo.Surface, line rm.Line, scale, p
 
 	// Draw path
 	for i, point := range line.Points {
-		x, y := normalized(point, scale)
-		// Convert Y coordinate
-		y = pageHeight - y
+		x, y := transform.apply(point)
 
 		if i == 0 {
 			surface.MoveTo(x, y)
