@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -220,4 +221,175 @@ func sessionCookieFor(t *testing.T, app *ReactAppWrapper, user *model.User) *htt
 	}
 	t.Fatal("no session cookie was issued")
 	return nil
+}
+
+func adminAppWithStorer(t *testing.T, users ...*model.User) (*ReactAppWrapper, *gin.Engine, *fakeUserStorer) {
+	t.Helper()
+	admin := mustUser(t, "root", "hunter2")
+	admin.IsAdmin = true
+	storer := newFakeStorer(append(users, admin)...)
+	app, router := appWithStorer(t, &config.Config{}, storer)
+	return app, router, storer
+}
+
+func adminRequest(t *testing.T, app *ReactAppWrapper, router *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	admin, err := app.userStorer.GetUser("root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reader *strings.Reader
+	if body == "" {
+		reader = strings.NewReader("")
+	} else {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookieFor(t, app, admin))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+// Without this the flag can only be set by editing the profile file by hand,
+// which is not a revocation procedure anybody will follow under pressure.
+func TestAnAdminCanDisableAndReEnableAnAccount(t *testing.T) {
+	alice := mustUser(t, "alice", "hunter2")
+	app, router, storer := adminAppWithStorer(t, alice)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"alice","disabled":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("disable: got %d, want 202", rec.Code)
+	}
+	if !storer.users["alice"].Disabled {
+		t.Fatal("the flag was not stored")
+	}
+
+	rec = adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"alice","disabled":false}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("re-enable: got %d, want 202", rec.Code)
+	}
+	if storer.users["alice"].Disabled {
+		t.Error("the account was not re-enabled; revocation has to be reversible")
+	}
+}
+
+func TestTheUserListShowsWhoIsDisabled(t *testing.T) {
+	alice := mustUser(t, "alice", "hunter2")
+	alice.Disabled = true
+	app, router, _ := adminAppWithStorer(t, alice)
+
+	rec := adminRequest(t, app, router, http.MethodGet, "/ui/api/users", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d", rec.Code)
+	}
+
+	var list []struct {
+		ID       string `json:"userid"`
+		Disabled bool   `json:"disabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("body %q: %v", rec.Body.String(), err)
+	}
+
+	found := false
+	for _, u := range list {
+		if u.ID == "alice" {
+			found = true
+			if !u.Disabled {
+				t.Error("alice is disabled but the list does not say so")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("alice missing from %q", rec.Body.String())
+	}
+}
+
+// An edit that says nothing about the flag must not change it. With a plain
+// bool, a password change or an email edit would quietly re-enable a revoked
+// account, and nothing in the request would show that it had.
+func TestAnUnrelatedEditLeavesTheDisabledFlagAlone(t *testing.T) {
+	alice := mustUser(t, "alice", "hunter2")
+	alice.Disabled = true
+	app, router, storer := adminAppWithStorer(t, alice)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"alice","email":"alice@example.com"}`)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want 202", rec.Code)
+	}
+	if !storer.users["alice"].Disabled {
+		t.Error("an unrelated edit re-enabled a revoked account")
+	}
+}
+
+// Disabling the last enabled admin leaves nobody who can undo it: the web UI is
+// the only place the flag can be cleared, and every admin session is refused the
+// moment the flag is set. Recovery then means editing a profile file on disk.
+func TestTheLastEnabledAdminCannotBeDisabled(t *testing.T) {
+	app, router, storer := adminAppWithStorer(t)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"root","disabled":true}`)
+
+	if rec.Code == http.StatusAccepted {
+		t.Fatal("the only admin disabled themselves, locking the instance")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Errorf("got %d, want 409", rec.Code)
+	}
+	if storer.users["root"].Disabled {
+		t.Error("the flag was stored anyway")
+	}
+}
+
+func TestAnAdminCanBeDisabledWhileAnotherEnabledAdminRemains(t *testing.T) {
+	second := mustUser(t, "second", "hunter2")
+	second.IsAdmin = true
+	app, router, storer := adminAppWithStorer(t, second)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"second","disabled":true}`)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want 202", rec.Code)
+	}
+	if !storer.users["second"].Disabled {
+		t.Error("the flag was not stored")
+	}
+}
+
+func TestAnAlreadyDisabledAdminDoesNotCountAsCover(t *testing.T) {
+	spare := mustUser(t, "spare", "hunter2")
+	spare.IsAdmin = true
+	spare.Disabled = true
+	app, router, _ := adminAppWithStorer(t, spare)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"root","disabled":true}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("got %d, want 409; a disabled admin cannot undo anything", rec.Code)
+	}
+}
+
+func TestDisablingAPlainUserIsNeverBlocked(t *testing.T) {
+	alice := mustUser(t, "alice", "hunter2")
+	app, router, storer := adminAppWithStorer(t, alice)
+
+	rec := adminRequest(t, app, router, http.MethodPut, "/ui/api/users",
+		`{"userid":"alice","disabled":true}`)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want 202", rec.Code)
+	}
+	if !storer.users["alice"].Disabled {
+		t.Error("the flag was not stored")
+	}
 }

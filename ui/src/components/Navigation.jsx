@@ -2,13 +2,18 @@ import React from "react";
 import { Nav, Navbar, Button, NavDropdown, Container } from "react-bootstrap";
 import { logout } from "../common/actions";
 import { useAuthState } from "../common/useAuthContext";
-import { NavLink } from "react-router-dom";
+import { NavLink, useHistory } from "react-router-dom";
 
 const NavigationBar = () => {
   const { state:{user}, dispatch } = useAuthState();
+  const history = useHistory();
 
-  function handleLogout(e) {
-    logout(dispatch);
+  async function handleLogout(e) {
+    await logout(dispatch);
+    // Landing on the logout page instead of the current one matters when the
+    // provider is the only way in: any other page redirects straight back to
+    // it and signs the user in again.
+    history.push("/logged-out");
   }
 
   function isAdmin() {

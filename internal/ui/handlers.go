@@ -407,6 +407,7 @@ func (app *ReactAppWrapper) getAppUsers(c *gin.Context) {
 			Name:      u.Name,
 			CreatedAt: u.CreatedAt,
 			IsAdmin:   u.IsAdmin,
+			Disabled:  &u.Disabled,
 		}
 		uilist = append(uilist, usr)
 	}
@@ -439,6 +440,8 @@ func (app *ReactAppWrapper) getUser(c *gin.Context) {
 		ID:        user.ID,
 		Email:     user.Email,
 		Name:      user.Name,
+		IsAdmin:   user.IsAdmin,
+		Disabled:  &user.Disabled,
 		CreatedAt: user.CreatedAt,
 	}
 	for _, i := range user.Integrations {
@@ -474,6 +477,20 @@ func (app *ReactAppWrapper) updateUser(c *gin.Context) {
 		user.Email = req.Email
 	}
 
+	if req.Disabled != nil && user.Disabled != *req.Disabled {
+		// Clearing the flag is only possible from the web UI, and a disabled
+		// admin is refused by the session middleware, so disabling the last
+		// enabled admin is a one way door out of the instance.
+		if *req.Disabled && user.IsAdmin && app.isLastEnabledAdmin(user.ID) {
+			log.Warn(uiLogger, "refused to disable the last enabled admin: ", user.ID)
+			c.AbortWithStatusJSON(http.StatusConflict,
+				viewmodel.NewErrorResponse("cannot disable the last enabled admin; promote another admin first"))
+			return
+		}
+		user.Disabled = *req.Disabled
+		log.Warn(uiLogger, "account ", user.ID, " disabled=", user.Disabled, " by ", userID(c))
+	}
+
 	err = app.userStorer.UpdateUser(user)
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -481,6 +498,24 @@ func (app *ReactAppWrapper) updateUser(c *gin.Context) {
 	}
 	c.Status(http.StatusAccepted)
 }
+
+// isLastEnabledAdmin reports whether uid is the only admin still able to log in.
+// A storage failure is reported as "yes", so an unreadable user list refuses the
+// change rather than allowing the one that cannot be undone.
+func (app *ReactAppWrapper) isLastEnabledAdmin(uid string) bool {
+	users, err := app.userStorer.GetUsers()
+	if err != nil {
+		log.Error(uiLogger, "cannot list users to check for other admins: ", err)
+		return true
+	}
+	for _, u := range users {
+		if u.ID != uid && u.IsAdmin && !u.Disabled {
+			return false
+		}
+	}
+	return true
+}
+
 func (app *ReactAppWrapper) deleteUser(c *gin.Context) {
 	uid := c.Param(useridParam)
 	if uid == userID(c) {

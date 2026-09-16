@@ -1,5 +1,4 @@
 import constants from "../common/constants";
-import { jwtDecode } from "jwt-decode";
 
 class ApiServices {
   header() {
@@ -21,21 +20,54 @@ class ApiServices {
       body: JSON.stringify(loginData),
     })
       .then((r) => {
+        if (r.status === 403) {
+          throw new Error("This account has been disabled");
+        }
         if (!r.ok) {
           throw new Error(r.statusText);
         }
-        return r.text();
       })
-      .then((text) => {
-        let user = jwtDecode(text);
+      .then(() => this.me());
+  }
+  // The session lives in an HttpOnly cookie, so the profile is asked for rather
+  // than decoded here. This is also how the OIDC callback page finds out who it
+  // has a session for.
+  me() {
+    return fetch(`${constants.ROOT_URL}/me`, {
+      method: "GET",
+      headers: this.header(),
+    })
+      .then((r) => {
+        if (r.status === 401 || r.status === 403) {
+          removeUser();
+          throw new Error("Not authenticated");
+        }
+        if (!r.ok) {
+          throw new Error(r.statusText);
+        }
+        return r.json();
+      })
+      .then((user) => {
         localStorage.setItem("currentUser", JSON.stringify(user));
-        localStorage.setItem("authToken", text);
         return user;
       });
   }
+  // Served whether or not OIDC is configured; the bundle is compiled into the
+  // binary and cannot read the server's environment.
+  oidcInfo() {
+    return fetch(`${constants.ROOT_URL}/oidc/info`, {
+      method: "GET",
+      headers: this.header(),
+    }).then((r) => {
+      if (!r.ok) {
+        throw new Error(r.statusText);
+      }
+      return r.json();
+    });
+  }
   logout() {
     removeUser();
-    fetch(`${constants.ROOT_URL}/logout`);
+    return fetch(`${constants.ROOT_URL}/logout`);
   }
 
   upload(parent, files) {
@@ -166,6 +198,13 @@ class ApiServices {
       body: JSON.stringify(usr),
     }).then((r) => handleError(r));
   }
+  setuserdisabled(userid, disabled) {
+    return fetch(`${constants.ROOT_URL}/users`, {
+      method: "PUT",
+      headers: this.header(),
+      body: JSON.stringify({ userid, disabled }),
+    }).then((r) => handleError(r));
+  }
   deleteuser(userid) {
     return fetch(`${constants.ROOT_URL}/users/${userid}`, {
       method: "DELETE",
@@ -239,7 +278,6 @@ class ApiServices {
 
 function removeUser(){
   localStorage.removeItem("currentUser");
-  localStorage.removeItem("authToken");
 }
 function handleError(r) {
   if (!r.ok) {

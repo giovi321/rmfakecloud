@@ -10,6 +10,8 @@ import Navigationbar from "./components/Navigation";
 import PasscodeResets from "./components/PasscodeResets";
 
 import Login from "./pages/Login";
+import OidcCallback from "./pages/OidcCallback";
+import LoggedOut from "./pages/LoggedOut";
 import Home from "./pages/Home";
 import Connect from "./pages/Connect";
 import Documents from "./pages/Documents";
@@ -55,6 +57,8 @@ export default function App() {
                 <PrivateRoute path="/admin" roles={[Role.Admin]} component={Admin} />
 
                 <Route path="/login" component={Login} />
+                <Route path="/oidc-success" component={OidcCallback} />
+                <Route path="/logged-out" component={LoggedOut} />
                 <Route component={NoMatch} />
               </Switch>
             </div>
