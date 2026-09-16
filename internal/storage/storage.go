@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"io"
 	"time"
 
@@ -8,6 +9,11 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/messages"
 	"github.com/ddvk/rmfakecloud/internal/model"
 )
+
+// ErrUserNotFound is returned by UserStorer.GetUser when no such user exists.
+// It is what lets a caller provision on first login without treating an
+// unreadable disk as an invitation to create an account.
+var ErrUserNotFound = errors.New("user not found")
 
 // ExportOption type of export
 type ExportOption int

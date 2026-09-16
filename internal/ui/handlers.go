@@ -14,7 +14,6 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -131,39 +130,18 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 		return
 	}
 
-	scopes := ""
-	if user.Sync15 {
-		scopes = isSync15Key
-	}
-	expiresAfter := 24 * time.Hour
-	expires := time.Now().Add(expiresAfter)
-	claims := &WebUserClaims{
-		UserID:    user.ID,
-		BrowserID: uuid.NewString(),
-		Email:     user.Email,
-		Scopes:    scopes,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expires),
-			Issuer:    "rmFake WEB",
-			Audience:  []string{WebUsage},
-		},
-	}
-	if user.IsAdmin {
-		claims.Roles = []string{AdminRole}
-	} else {
-		claims.Roles = []string{"User"}
+	if user.Disabled {
+		log.Warn(uiLogger, "disabled account: ", form.Email, ", login failed ip: ", c.ClientIP())
+		c.AbortWithStatus(http.StatusForbidden)
+		return
 	}
 
-	tokenString, err := common.SignClaims(claims, app.cfg.JWTSecretKey)
-
+	tokenString, err := app.issueWebSession(c, user)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	log.Debug("cookie expires after: ", expiresAfter)
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(cookieName, tokenString, int(expiresAfter.Seconds()), "/", "", app.cfg.HTTPSCookie, true)
 
 	c.String(http.StatusOK, tokenString)
 }
@@ -224,6 +202,13 @@ func (app *ReactAppWrapper) newCode(c *gin.Context) {
 	if err != nil {
 		log.Error("Unable to find user: ", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, viewmodel.NewErrorResponse(err.Error()))
+		return
+	}
+
+	// Without this a revoked user could simply pair another tablet.
+	if user.Disabled {
+		log.Warn(uiLogger, "refused an enrolment code for the disabled account ", uid)
+		c.AbortWithStatusJSON(http.StatusForbidden, viewmodel.NewErrorResponse("account disabled"))
 		return
 	}
 
@@ -894,4 +879,3 @@ func (app *ReactAppWrapper) screenshareDeleteRoom(c *gin.Context) {
 	app.roomManager.DeleteAllForUser(uid)
 	c.Status(http.StatusNoContent)
 }
-

@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"net/http"
 	"path"
 	"time"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/ddvk/rmfakecloud/internal/app/hub"
 	"github.com/ddvk/rmfakecloud/internal/app/passcodestore"
 	"github.com/ddvk/rmfakecloud/internal/common"
@@ -14,11 +16,13 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/messages"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
 	"github.com/ddvk/rmfakecloud/internal/storage"
-	"github.com/ddvk/rmfakecloud/internal/templates"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
+	"github.com/ddvk/rmfakecloud/internal/templates"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	webui "github.com/ddvk/rmfakecloud/ui"
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/oauth2"
 )
 
 type backend interface {
@@ -79,6 +83,8 @@ type ReactAppWrapper struct {
 	roomManager   *screenshare.RoomManager
 	mqtt          mqttBridge
 	templates     *templates.Store
+	oidcProvider  *gooidc.Provider
+	oauth2Config  oauth2.Config
 }
 
 // hack for serving index.html on /
@@ -124,6 +130,26 @@ func New(cfg *config.Config,
 		roomManager: roomManager,
 		mqtt:        mqttBroker,
 	}
+
+	// Discovery is a network call, so it happens once at startup rather than on
+	// every login. A provider that cannot be reached is a configuration error and
+	// stops the server, instead of failing every login later with no explanation.
+	if cfg.OIDC.Enabled() {
+		provider, err := gooidc.NewProvider(context.Background(), cfg.OIDC.ProviderURL)
+		if err != nil {
+			log.Fatalf("OIDC: cannot discover the provider at %s: %v", cfg.OIDC.ProviderURL, err)
+		}
+		staticWrapper.oidcProvider = provider
+		staticWrapper.oauth2Config = oauth2.Config{
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			RedirectURL:  cfg.OIDC.RedirectURL,
+			Endpoint:     provider.Endpoint(),
+			Scopes:       cfg.OIDC.Scopes(),
+		}
+		log.Info("OIDC provider ready: ", cfg.OIDC.ProviderURL)
+	}
+
 	return &staticWrapper
 }
 
@@ -139,6 +165,12 @@ func (w ReactAppWrapper) Open(filepath string) (http.File, error) {
 	f, err := w.fs.Open(fullpath)
 	return f, err
 }
+
+// serveIndex hands the browser the single page app shell.
+func (app *ReactAppWrapper) serveIndex(c *gin.Context) {
+	c.FileFromFS(indexReplacement, app)
+}
+
 func badReq(c *gin.Context, message string) {
 	c.AbortWithStatusJSON(http.StatusBadRequest, viewmodel.NewErrorResponse(message))
 }
