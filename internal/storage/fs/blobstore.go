@@ -5,21 +5,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/danjacques/gofslock/fslock"
+	"github.com/ddvk/rmfakecloud/internal/archive"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/ddvk/rmfakecloud/internal/storage/exporter"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/google/uuid"
+	"github.com/juju/fslock"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -128,21 +131,176 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 	}
 	ls := fs.BlobStorage(uid)
 
-	archive, err := models.ArchiveFromHashDoc(doc, ls)
+	pages, err := blobPages(doc, ls)
 	if err != nil {
 		return nil, err
 	}
+
+	payload, err := blobPayload(doc, ls)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("exporting %d pages of doc %s, templates %v", len(pages), docid, pageTemplates(pages))
+
 	reader, writer := io.Pipe()
+
 	go func() {
-		err = exporter.RenderRmapi(archive, writer)
-		if err != nil {
-			log.Error(err)
-			writer.Close()
+		if payload != nil {
+			defer payload.Close()
+		}
+
+		var background io.ReadSeeker
+		if payload != nil {
+			background = payload
+		}
+
+		if err := exporter.RenderPages(pages, background, fs.templateStore(), writer); err != nil {
+			log.Errorf("failed to export doc %s: %v", docid, err)
+			writer.CloseWithError(err)
 			return
 		}
 		writer.Close()
 	}()
-	return reader, err
+
+	return reader, nil
+}
+
+// blobPages lists the pages of a blob document in the order its content file
+// declares, each with its own format. A page the content file lists but that
+// has no .rm blob is kept without data: the device leaves one out for a page
+// nobody drew on, and dropping it would renumber every page after it.
+func blobPages(doc *models.HashDoc, ls models.RemoteStorage) ([]exporter.Page, error) {
+	content, err := blobContent(doc, ls)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := make(map[string]string)
+	var fileOrder []string
+	for _, f := range doc.Files {
+		if filepath.Ext(f.EntryName) != storage.RmFileExt {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(f.EntryName), storage.RmFileExt)
+		hashes[name] = f.Hash
+		fileOrder = append(fileOrder, name)
+	}
+
+	declared := content.Pages
+	if len(declared) == 0 && len(fileOrder) > 0 {
+		// No page list to go by. The index is sorted by entry name, which
+		// runs opposite to page order, so read it back to front.
+		log.Warn("the content file lists no pages, falling back to the index order")
+		declared = make([]string, 0, len(fileOrder))
+		for i := len(fileOrder) - 1; i >= 0; i-- {
+			declared = append(declared, fileOrder[i])
+		}
+	}
+
+	landscape := strings.EqualFold(strings.TrimSpace(content.Orientation), "landscape")
+
+	pages := make([]exporter.Page, 0, len(declared))
+	for index, name := range declared {
+		template := ""
+		if index < len(content.PageTemplates) {
+			template = content.PageTemplates[index]
+		}
+
+		hash, ok := hashes[name]
+		if !ok {
+			log.Debugf("page %s has no data, leaving it blank", name)
+			pages = append(pages, exporter.Page{Template: template, Landscape: landscape})
+			continue
+		}
+
+		data, err := readBlob(ls, hash)
+		if err != nil {
+			return nil, err
+		}
+
+		version, err := exporter.DetectRmVersionFromBytes(data)
+		if err != nil {
+			log.Warnf("page %s has an unknown format, treating it as v5: %v", name, err)
+			version = exporter.VersionV5
+		}
+
+		pages = append(pages, exporter.Page{
+			Data:      data,
+			Version:   version,
+			Template:  template,
+			Landscape: landscape,
+		})
+	}
+
+	return pages, nil
+}
+
+// pageTemplates counts the templates a document's pages ask for, for the log.
+func pageTemplates(pages []exporter.Page) map[string]int {
+	counts := make(map[string]int)
+	for _, page := range pages {
+		name := page.Template
+		if name == "" {
+			name = "(none)"
+		}
+		counts[name]++
+	}
+	return counts
+}
+
+// blobContent reads and normalizes the content file of a blob document.
+func blobContent(doc *models.HashDoc, ls models.RemoteStorage) (content archive.Content, err error) {
+	for _, f := range doc.Files {
+		if filepath.Ext(f.EntryName) != storage.ContentFileExt {
+			continue
+		}
+
+		contentBytes, err := readBlob(ls, f.Hash)
+		if err != nil {
+			return content, err
+		}
+
+		if err := json.Unmarshal(contentBytes, &content); err != nil {
+			// Keep going: what was decoded before the failure is still
+			// usable, and an unreadable field should not cost the export.
+			log.Warnf("failed to read the content file: %v", err)
+		}
+		content.NormalizePages()
+		break
+	}
+	return content, nil
+}
+
+// blobPayload opens the pdf or epub a document was made from, or returns nil
+// for a plain notebook.
+func blobPayload(doc *models.HashDoc, ls models.RemoteStorage) (io.ReadSeekCloser, error) {
+	for _, f := range doc.Files {
+		switch filepath.Ext(f.EntryName) {
+		case storage.PdfFileExt, storage.EpubFileExt:
+			blob, err := ls.GetReader(f.Hash)
+			if err != nil {
+				return nil, err
+			}
+			payload, ok := blob.(io.ReadSeekCloser)
+			if !ok {
+				blob.Close()
+				return nil, fmt.Errorf("the payload of %s cannot be seeked", doc.EntryName)
+			}
+			return payload, nil
+		}
+	}
+	return nil, nil
+}
+
+// readBlob reads a whole blob.
+func readBlob(ls models.RemoteStorage, hash string) ([]byte, error) {
+	blob, err := ls.GetReader(hash)
+	if err != nil {
+		return nil, err
+	}
+	defer blob.Close()
+	return io.ReadAll(blob)
 }
 
 // UpdateBlobDocument updates metadata
@@ -646,7 +804,8 @@ func (fs *FileSystemStorage) LoadBlob(uid, blobid string) (reader io.ReadCloser,
 	log.Debugln("Fullpath:", blobPath)
 	if blobid == rootBlob {
 		historyPath := path.Join(fs.getUserBlobPath(uid), historyFile)
-		lock, err := fslock.Lock(historyPath)
+		lock := fslock.New(historyPath)
+		err := lock.LockWithTimeout(time.Duration(time.Second * 5))
 		if err != nil {
 			log.Error("cannot obtain lock")
 			return nil, 0, 0, "", err
@@ -691,8 +850,8 @@ func (fs *FileSystemStorage) StoreBlob(uid, id string, stream io.Reader, lastGen
 	reader := stream
 	if id == rootBlob {
 		historyPath := path.Join(fs.getUserBlobPath(uid), historyFile)
-		var lock fslock.Handle
-		lock, err = fslock.Lock(historyPath)
+		lock := fslock.New(historyPath)
+		err = lock.LockWithTimeout(time.Duration(time.Second * 5))
 		if err != nil {
 			log.Error("cannot obtain lock")
 			return 0, err
@@ -760,3 +919,4 @@ func generationFromFileSize(size int64) int64 {
 	//time + 1 space + 64 hash + 1 newline
 	return size / 86
 }
+

@@ -173,6 +173,39 @@ class ApiServices {
     }).then((r) => handleError(r));
   }
 
+  listtemplates() {
+    return fetch(`${constants.ROOT_URL}/templates`, {
+      method: "GET",
+      headers: this.header(),
+    }).then((r) => {
+      handleError(r);
+      return r.json();
+    });
+  }
+
+  uploadtemplates(files) {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("file", f));
+
+    return fetch(`${constants.ROOT_URL}/templates`, {
+      method: "POST",
+      body: formData,
+    }).then(async (r) => {
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || r.statusText);
+      }
+      return r.json();
+    });
+  }
+
+  deletetemplate(name) {
+    return fetch(`${constants.ROOT_URL}/templates/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      headers: this.header(),
+    }).then((r) => handleError(r));
+  }
+
   listintegration() {
     return fetch(`${constants.ROOT_URL}/integrations`, {
       method: "GET",

@@ -37,6 +37,10 @@ const (
 	EnvLogFormat = "LOGFORMAT"
 	// envDataDir
 	envDataDir = "DATADIR"
+	// envTemplatesDir where the page templates copied off a device are kept
+	envTemplatesDir = "RM_TEMPLATES_DIR"
+	// DefaultTemplatesDir is the folder under the data dir holding templates
+	DefaultTemplatesDir = "templates"
 	envPort    = "PORT"
 	// EnvStorageURL the external name of the service
 	EnvStorageURL = "STORAGE_URL"
@@ -106,6 +110,7 @@ type Config struct {
 	MQTTPort          string
 	ICEServers        []interface{}
 	HashSchemaVersion string
+	TemplatesDir      string
 }
 
 // Verify verify
@@ -156,6 +161,11 @@ func FromEnv() *Config {
 		if err != nil {
 			log.Fatal("DataDir: ", err)
 		}
+	}
+
+	templatesDir := os.Getenv(envTemplatesDir)
+	if templatesDir == "" {
+		templatesDir = filepath.Join(dataDir, DefaultTemplatesDir)
 	}
 
 	port := os.Getenv(envPort)
@@ -270,6 +280,7 @@ func FromEnv() *Config {
 		StorageURL:        uploadURL,
 		CloudHost:         cloudHost,
 		DataDir:           dataDir,
+		TemplatesDir:      templatesDir,
 		JWTSecretKey:      dk,
 		JWTRandom:         jwtGenerated,
 		Certificate:       cert,
@@ -398,6 +409,10 @@ myScript hwr (needs a developer account):
 	%s
 	%s      override the language specified in myScript requests
 	%s      custom myScript host URL (default: https://cloud.myscript.com)
+
+V6 file format support:
+	Native rmc-go library with Cairo renderer is always enabled.
+	No configuration needed - v6 files are rendered in-process.
 `,
 		envJWTSecretKey,
 		EnvStorageURL,
