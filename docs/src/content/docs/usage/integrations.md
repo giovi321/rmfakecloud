@@ -14,7 +14,7 @@ You can edit your integrations using the Integration tab in the UI.
 
 It can be used with any WebDAV services, for example a Nextcloud/Owncloud instance.
 
-Add this to your [`.userprofile`](userprofile/):
+Add this to your [`.userprofile`](../userprofile/):
 
 ```yaml
 integrations:
@@ -49,7 +49,7 @@ integrations:
 
 You can share a dedicated path on your system. This can be a simple directory or a mount point using FUSE or whatever.
 
-Add this to your [`.userprofile`](userprofile/):
+Add this to your [`.userprofile`](../userprofile/):
 
 ```yaml
 integrations:

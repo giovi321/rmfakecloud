@@ -14,7 +14,7 @@ To setup it for normal usage, you'll use need to setup a volume to store user co
 docker run -it --rm -p 3000:3000 -p 8883:8883 -v ./data:/data -e JWT_SECRET_KEY='something' ddvk/rmfakecloud
 ```
 
-Explore others configuration variables on [the dedicated page](configuration/).
+Explore others configuration variables on [the dedicated page](../configuration/).
 
 
 ## docker-compose file
@@ -37,7 +37,7 @@ services:
 
 In this example, an external file named `env` is provided that contains the environment variables. Any of the [ways to set environment variables](https://docs.docker.com/compose/environment-variables/set-environment-variables/) for docker compose will work.
 
-For the possible environment variables, please have a look in the [configuration](configuration/) section.
+For the possible environment variables, please have a look in the [configuration](../configuration/) section.
 
 ## Rebuild the image
 

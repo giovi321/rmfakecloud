@@ -147,6 +147,15 @@ func (app *App) newUserToken(c *gin.Context) {
 		return
 	}
 
+	// The device token carries no expiry, so this renewal is the only moment the
+	// server reconsiders a paired tablet. A disabled account loses sync here,
+	// within one user token lifetime, without its documents being deleted.
+	if user.Disabled {
+		log.Warn(handlerLog, "refused a user token for the disabled account ", uid)
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+
 	scopes := []string{"intgr", "screenshare", "docedit"}
 
 	if app.cfg.HWRApplicationKey != "" && app.cfg.HWRHmac != "" {

@@ -17,6 +17,72 @@ The configuration is made through environment variables.
 | `RM_TRUST_PROXY`  | Trust the proxy for client ip addresses (X-Forwarded-For/X-Real-IP) default false |
 | `HASH_SCHEMA_VERSION` | Hash tree schema version: "3" or "4" (default: 3) |
 
+## OIDC login for the web UI
+
+OpenID Connect covers the web UI only. The tablet keeps pairing with an enrolment
+code, because it speaks reMarkable's own token API and has no browser to run an
+authorization code flow in. What this buys you is that the code can only be
+minted from a web session, so the provider controls who can enrol a device even
+though the device never talks to it.
+
+Set all four of these to turn OIDC on. Setting some but not all of them stops the
+server at startup rather than failing quietly at the first login.
+
+| Variable name | Description |
+|---|---|
+| `OIDC_PROVIDER_URL` | Issuer discovery URL, the base URL and not `/.well-known/openid-configuration`. Example: `https://sso.example.com` |
+| `OIDC_CLIENT_ID` | OAuth2 client id |
+| `OIDC_CLIENT_SECRET` | OAuth2 client secret |
+| `OIDC_REDIRECT_URL` | Callback URL, must end with `/ui/api/oidc/callback`. Example: `https://rm.example.com/ui/api/oidc/callback` |
+
+`RM_HTTPS_COOKIE=true` is required when OIDC is enabled: the state, nonce and PKCE
+cookies carry the whole flow, and over plain HTTP they are readable. The server
+refuses to start without it.
+
+The rest are optional.
+
+| Variable name | Description |
+|---|---|
+| `OIDC_DISABLE_LOCAL_LOGIN` | `true` removes the password form and the registration endpoint, and sends any unauthenticated page straight to the provider. Default `false`, so password login keeps working alongside OIDC. It has no effect while OIDC is off, so it cannot leave an instance with no way in |
+| `OIDC_USERID_CLAIM` | Claim used as the rmfakecloud user id (default: `preferred_username`). Dotted paths such as `custom.userid` work. If it is empty, the `email` claim is used instead |
+| `OIDC_ALLOW_UNVERIFIED_EMAIL` | `true` allows login when `email_verified` is missing or false. Default `false`. This only applies when the user id actually is an email, including when it was reached by fallback. Leave it off unless you know your provider verifies addresses another way: a provider that lets a user set any address can otherwise be used to take over the account belonging to it |
+| `OIDC_ADMIN_CLAIM` | Dotted path to the claim holding role values, for example `groups` or `realm_access.roles`. The claim is read from the ID token |
+| `OIDC_ADMIN_CLAIM_VALUE` | The value in that claim which grants admin, for example `rmfakecloud-admins`. Both halves are needed; with neither set, no OIDC login changes anyone's admin flag |
+| `OIDC_EXTRA_SCOPES` | Whitespace separated extra scopes. `openid`, `email` and `profile` are always requested. Use this when your provider needs a scope before it will put roles in the ID token |
+| `OIDC_DISPLAY_NAME` | Label on the login button (default: `Login with OIDC`) |
+
+### How accounts are matched
+
+The claim value is lowercased and reduced to `a-z 0-9 . @ _ -`, and that is the
+account key. First login creates the account; later logins find it again. If an
+account with that key already exists it is adopted, which is how you migrate an
+existing local user to the provider, so make sure the claim you pick cannot be
+set by users themselves.
+
+Admin is re-evaluated on every login when `OIDC_ADMIN_CLAIM` and
+`OIDC_ADMIN_CLAIM_VALUE` are both set, and left untouched when they are not.
+
+### Revoking access
+
+Disabling an account in your provider does not stop a tablet that is already
+paired: it holds a device token with no expiry and renews a user token against
+rmfakecloud, not against the provider. Disable the account in rmfakecloud as well,
+from the admin users page. The tablet stops syncing at its next token renewal,
+within three hours, and keeps its documents. Re-enabling restores it.
+
+The last enabled admin cannot be disabled, since clearing the flag is only
+possible from the web UI.
+
+### Rate limiting
+
+The [fail2ban](../fail2ban/) filter matches failed password logins. With
+`OIDC_DISABLE_LOCAL_LOGIN=true` there are none to match, and rate limiting
+becomes your provider's job.
+
+### Provider guides
+
+- [Authelia](../oidc/authelia/)
+
 ## Handwriting recognition
 
 To use the handwriting recognition feature, you need first to create a free account on <https://developer.myscript.com/> (up to 2000 free recognitions per month).

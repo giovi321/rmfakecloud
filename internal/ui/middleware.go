@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -13,6 +14,29 @@ import (
 const (
 	backendVersionKey string = "BackendVersion"
 )
+
+// parseWebSessionCookie reads the auth cookie and returns the verified claims.
+func (app *ReactAppWrapper) parseWebSessionCookie(c *gin.Context) (*WebUserClaims, error) {
+	token, err := c.Cookie(cookieName)
+	if err != nil {
+		return nil, err
+	}
+	claims := &WebUserClaims{}
+	if err := common.ClaimsFromToken(claims, token, app.cfg.JWTSecretKey); err != nil {
+		return nil, err
+	}
+	if !slices.Contains(claims.Audience, WebUsage) {
+		return nil, errors.New("wrong token audience")
+	}
+	return claims, nil
+}
+
+// webAuthenticated reports whether the request already carries a session, so a
+// redirect decision can be made without aborting the request.
+func (app *ReactAppWrapper) webAuthenticated(c *gin.Context) bool {
+	_, err := app.parseWebSessionCookie(c)
+	return err == nil
+}
 
 // IsAdmin checks if admin
 func IsAdmin(c *gin.Context) bool {
@@ -66,6 +90,22 @@ func (app *ReactAppWrapper) authMiddleware() gin.HandlerFunc {
 		}
 
 		uid := common.SanitizeUid(claims.UserID)
+
+		// Revocation has to bite before the session expires, so the stored
+		// record is consulted on every request rather than trusted from the
+		// token. This costs one read per request and is the point of the flag.
+		user, err := app.userStorer.GetUser(uid)
+		if err != nil {
+			log.Warn("[ui-authmiddleware] no such user: ", uid)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or incorrect token"})
+			return
+		}
+		if user.Disabled {
+			log.Warn("[ui-authmiddleware] disabled account: ", uid)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "account disabled"})
+			return
+		}
+
 		c.Set(userIDContextKey, uid)
 
 		brid := claims.BrowserID

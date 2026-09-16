@@ -49,6 +49,10 @@ type User struct {
 	UpdatedAt     time.Time
 	// IsAdmin indicates if the user can managed others users in this instance.
 	IsAdmin bool
+	// Disabled revokes access without deleting the account or its documents.
+	// A tablet holds a device token that never expires and renews a user token
+	// against this record, so this flag is what actually cuts it off.
+	Disabled bool
 	// Sync15 if the user should use this sync type (which uses a lot less bandwidth).
 	Sync15 bool
 	// AdditionalScopes is a list of scopes to add to the user session.

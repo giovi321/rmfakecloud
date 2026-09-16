@@ -217,6 +217,10 @@ type User struct {
 	Name         string `json:"name"`
 	NewPassword  string `json:"newpassword,omitempty"`
 	IsAdmin 	 bool `json:"isAdmin"`
+	// Disabled is a pointer so that an update which does not mention it leaves
+	// it alone. A plain bool would silently re-enable a revoked account on any
+	// unrelated edit, such as a password change.
+	Disabled     *bool `json:"disabled,omitempty"`
 	CreatedAt    time.Time
 	Integrations []string `json:"integrations,omitempty"`
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -131,39 +130,18 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 		return
 	}
 
-	scopes := ""
-	if user.Sync15 {
-		scopes = isSync15Key
-	}
-	expiresAfter := 24 * time.Hour
-	expires := time.Now().Add(expiresAfter)
-	claims := &WebUserClaims{
-		UserID:    user.ID,
-		BrowserID: uuid.NewString(),
-		Email:     user.Email,
-		Scopes:    scopes,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expires),
-			Issuer:    "rmFake WEB",
-			Audience:  []string{WebUsage},
-		},
-	}
-	if user.IsAdmin {
-		claims.Roles = []string{AdminRole}
-	} else {
-		claims.Roles = []string{"User"}
+	if user.Disabled {
+		log.Warn(uiLogger, "disabled account: ", form.Email, ", login failed ip: ", c.ClientIP())
+		c.AbortWithStatus(http.StatusForbidden)
+		return
 	}
 
-	tokenString, err := common.SignClaims(claims, app.cfg.JWTSecretKey)
-
+	tokenString, err := app.issueWebSession(c, user)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	log.Debug("cookie expires after: ", expiresAfter)
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(cookieName, tokenString, int(expiresAfter.Seconds()), "/", "", app.cfg.HTTPSCookie, true)
 
 	c.String(http.StatusOK, tokenString)
 }
@@ -224,6 +202,13 @@ func (app *ReactAppWrapper) newCode(c *gin.Context) {
 	if err != nil {
 		log.Error("Unable to find user: ", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, viewmodel.NewErrorResponse(err.Error()))
+		return
+	}
+
+	// Without this a revoked user could simply pair another tablet.
+	if user.Disabled {
+		log.Warn(uiLogger, "refused an enrolment code for the disabled account ", uid)
+		c.AbortWithStatusJSON(http.StatusForbidden, viewmodel.NewErrorResponse("account disabled"))
 		return
 	}
 
@@ -422,6 +407,7 @@ func (app *ReactAppWrapper) getAppUsers(c *gin.Context) {
 			Name:      u.Name,
 			CreatedAt: u.CreatedAt,
 			IsAdmin:   u.IsAdmin,
+			Disabled:  &u.Disabled,
 		}
 		uilist = append(uilist, usr)
 	}
@@ -454,6 +440,8 @@ func (app *ReactAppWrapper) getUser(c *gin.Context) {
 		ID:        user.ID,
 		Email:     user.Email,
 		Name:      user.Name,
+		IsAdmin:   user.IsAdmin,
+		Disabled:  &user.Disabled,
 		CreatedAt: user.CreatedAt,
 	}
 	for _, i := range user.Integrations {
@@ -489,6 +477,20 @@ func (app *ReactAppWrapper) updateUser(c *gin.Context) {
 		user.Email = req.Email
 	}
 
+	if req.Disabled != nil && user.Disabled != *req.Disabled {
+		// Clearing the flag is only possible from the web UI, and a disabled
+		// admin is refused by the session middleware, so disabling the last
+		// enabled admin is a one way door out of the instance.
+		if *req.Disabled && user.IsAdmin && app.isLastEnabledAdmin(user.ID) {
+			log.Warn(uiLogger, "refused to disable the last enabled admin: ", user.ID)
+			c.AbortWithStatusJSON(http.StatusConflict,
+				viewmodel.NewErrorResponse("cannot disable the last enabled admin; promote another admin first"))
+			return
+		}
+		user.Disabled = *req.Disabled
+		log.Warn(uiLogger, "account ", user.ID, " disabled=", user.Disabled, " by ", userID(c))
+	}
+
 	err = app.userStorer.UpdateUser(user)
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -496,6 +498,24 @@ func (app *ReactAppWrapper) updateUser(c *gin.Context) {
 	}
 	c.Status(http.StatusAccepted)
 }
+
+// isLastEnabledAdmin reports whether uid is the only admin still able to log in.
+// A storage failure is reported as "yes", so an unreadable user list refuses the
+// change rather than allowing the one that cannot be undone.
+func (app *ReactAppWrapper) isLastEnabledAdmin(uid string) bool {
+	users, err := app.userStorer.GetUsers()
+	if err != nil {
+		log.Error(uiLogger, "cannot list users to check for other admins: ", err)
+		return true
+	}
+	for _, u := range users {
+		if u.ID != uid && u.IsAdmin && !u.Disabled {
+			return false
+		}
+	}
+	return true
+}
+
 func (app *ReactAppWrapper) deleteUser(c *gin.Context) {
 	uid := c.Param(useridParam)
 	if uid == userID(c) {
@@ -894,4 +914,3 @@ func (app *ReactAppWrapper) screenshareDeleteRoom(c *gin.Context) {
 	app.roomManager.DeleteAllForUser(uid)
 	c.Status(http.StatusNoContent)
 }
-

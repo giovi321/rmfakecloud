@@ -31,14 +31,36 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 			return
 		}
 
-		c.FileFromFS(indexReplacement, app)
+		// With local login disabled the provider is the only way in, so an
+		// unauthenticated browser is sent straight there. The callback landing
+		// page and the logout page are excluded: redirecting either one would
+		// loop, and redirecting the logout page would sign the user back in.
+		if !app.cfg.OIDC.LocalLoginEnabled() &&
+			!strings.HasPrefix(uri, OIDCSuccessPath) &&
+			!strings.HasPrefix(uri, OIDCLoggedOutPath) &&
+			!app.webAuthenticated(c) {
+
+			c.Redirect(http.StatusFound, OIDCLoginPath)
+			return
+		}
+
+		app.serveIndex(c)
 	})
 
 	r := router.Group("/ui/api")
-	r.POST("register", app.register)
-	r.POST("login", app.login)
+	// Served whether or not OIDC is configured: the frontend is compiled into
+	// the binary and has no other way to find out what the login page should show.
+	r.GET("oidc/info", app.oidcInfo)
+	if app.cfg.OIDC.Enabled() {
+		r.GET("oidc/login", app.oidcBegin)
+		r.GET("oidc/callback", app.oidcCallback)
+	}
+	if app.cfg.OIDC.LocalLoginEnabled() {
+		r.POST("register", app.register)
+		r.POST("login", app.login)
+	}
 	r.GET("logout", func(c *gin.Context) {
-		c.SetCookie(cookieName, "/", -1, "", "", false, true)
+		app.clearWebSession(c)
 		c.Status(http.StatusOK)
 	})
 	//with authentication
@@ -47,6 +69,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	auth.HEAD("/", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
+	auth.GET("me", app.meHandler)
 	auth.GET("sync", func(c *gin.Context) {
 		uid := userID(c)
 		br := c.GetString(browserIDContextKey)

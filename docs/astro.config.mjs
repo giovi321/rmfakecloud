@@ -32,6 +32,7 @@ export default defineConfig({
             { label: 'With Docker', link: '/install/docker/' },
             { label: 'With Helm', link: '/install/helm/' },
             { label: 'Configuration', link: '/install/configuration/' },
+            { label: 'OIDC with Authelia', link: '/install/oidc/authelia/' },
             { label: 'Apache', link: '/install/reverse-proxy/apache/' },
             { label: 'Nginx', link: '/install/reverse-proxy/nginx/' },
             { label: 'Traefik', link: '/install/reverse-proxy/traefik/' },

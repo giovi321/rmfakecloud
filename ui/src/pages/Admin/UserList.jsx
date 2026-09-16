@@ -64,6 +64,23 @@ export default function UserList() {
     refresh();
   }
 
+  // Revocation without deletion: the account keeps its documents, the tablet
+  // stops syncing at its next token renewal.
+  const toggleDisabled = async (e, user) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const next = !user.disabled
+    if (next && !window.confirm(`Disable ${user.userid}? Their tablet stops syncing within 3 hours. Documents are kept.`))
+      return false
+
+    try{
+      await apiService.setuserdisabled(user.userid, next)
+      refresh()
+    } catch(err){
+      toast.error('Error:'+ err)
+    }
+  }
+
   const remove = async (e, id) => {
     e.preventDefault()
     e.stopPropagation()
@@ -108,6 +125,7 @@ export default function UserList() {
             <th>Email</th>
             <th>Name</th>
             <th>Role</th>
+            <th>Status</th>
             <th>Created At</th>
             <th><Button onClick={newUser}>New User</Button></th>
           </tr>
@@ -120,8 +138,17 @@ export default function UserList() {
               <td>{x.email}</td>
               <td>{x.Name}</td>
               <td>{x.isAdmin && "admin"}</td>
+              <td>{x.disabled ? "disabled" : "active"}</td>
               <td>{formatDate(x.CreatedAt)}</td>
-              <td><Button variant="danger" onClick={(e) => remove(e,x.userid)}>Delete</Button></td>
+              <td>
+                <Button
+                  variant={x.disabled ? "success" : "warning"}
+                  onClick={(e) => toggleDisabled(e, x)}
+                >
+                  {x.disabled ? "Enable" : "Disable"}
+                </Button>{" "}
+                <Button variant="danger" onClick={(e) => remove(e,x.userid)}>Delete</Button>
+              </td>
             </tr>
           ))}
         </tbody>
