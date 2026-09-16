@@ -1,0 +1,71 @@
+name: Build binary
+
+# The deployable artifact for this fork. The target host cannot build: it has no Go,
+# 642 MB of RAM and a disk it shares with the service, so the binary is built here and
+# installed from the release below.
+#
+# glibc direction matters and is the reason ubuntu-24.04 is fine: its glibc 2.39 is
+# older than the target's 2.41, and a binary built against an older glibc runs against
+# a newer one. Building on a newer distro than the target would not.
+
+on:
+  push:
+    branches: [local-build]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cairo development headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the UI
+        run: |
+          corepack enable pnpm
+          corepack install -g pnpm@latest-9
+          cd ui && pnpm install --frozen-lockfile && pnpm build
+          # go generate embeds ui/dist, so a missing dist is baked into the binary
+          # silently. Fail here instead.
+          test -s dist/index.html
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the binary
+        run: |
+          VERSION="local-build-$(git rev-parse --short HEAD)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          go generate ./...
+          CGO_ENABLED=1 go build -tags cairo \
+            -ldflags "-s -w -X main.version=$VERSION" \
+            -o rmfakecloud-linux-amd64 ./cmd/rmfakecloud/
+          # -tags cairo without CGO builds a binary that runs and exports badly, so
+          # prove the renderer is linked in rather than trusting the flags.
+          ldd rmfakecloud-linux-amd64 | grep -q libcairo
+          printf '%s\n' "$VERSION" > VERSION
+          sha256sum rmfakecloud-linux-amd64 | cut -d' ' -f1 > rmfakecloud-linux-amd64.sha256
+          grep -a -q "$VERSION" rmfakecloud-linux-amd64
+
+      - name: Publish the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete local-build --yes --cleanup-tag 2>/dev/null || true
+          gh release create local-build \
+            --prerelease \
+            --title "Latest local-build ($VERSION)" \
+            --notes "Built from \`local-build\` at \`${{ github.sha }}\`. Stamped \`$VERSION\`, which is the string the update handler compares against the installed binary. Linux amd64, dynamically linked against libcairo." \
+            rmfakecloud-linux-amd64 rmfakecloud-linux-amd64.sha256 VERSION
