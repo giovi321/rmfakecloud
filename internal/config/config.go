@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/ddvk/rmfakecloud/internal/email"
 	log "github.com/sirupsen/logrus"
@@ -111,6 +112,7 @@ type Config struct {
 	ICEServers        []interface{}
 	HashSchemaVersion string
 	TemplatesDir      string
+	OIDC              OIDCConfig
 }
 
 // Verify verify
@@ -146,6 +148,23 @@ func (cfg *Config) Verify() {
 		log.Infof("WebRTC configured with %d ICE server(s)", len(cfg.ICEServers))
 	} else {
 		log.Info("No ICE servers configured - screenshare will only work on local networks")
+	}
+
+	if err := cfg.validateOIDC(); err != nil {
+		log.Fatal(err)
+	}
+	if cfg.OIDC.Enabled() {
+		log.Info("OIDC enabled, provider: ", cfg.OIDC.ProviderURL)
+		if !strings.HasSuffix(cfg.OIDC.RedirectURL, OIDCCallbackPath) {
+			log.Warnf("%s does not end with %s, check it matches the client config at the provider",
+				EnvOIDCRedirectURL, OIDCCallbackPath)
+		}
+		if cfg.OIDC.LocalLoginEnabled() {
+			log.Info("password login stays available alongside OIDC, set " +
+				EnvOIDCDisableLocalLogin + "=true to turn it off")
+		} else {
+			log.Warn("password login and registration are disabled, OIDC is the only way in")
+		}
 	}
 }
 
@@ -295,6 +314,7 @@ func FromEnv() *Config {
 		MQTTPort:          mqttPort,
 		ICEServers:        iceServers,
 		HashSchemaVersion: hashSchemaVersion,
+		OIDC:              oidcFromEnv(),
 	}
 	return &cfg
 }
@@ -413,6 +433,16 @@ myScript hwr (needs a developer account):
 V6 file format support:
 	Native rmc-go library with Cairo renderer is always enabled.
 	No configuration needed - v6 files are rendered in-process.
+
+OIDC login for the web UI (the tablet keeps using the enrolment code):
+	%s	provider discovery url, the base url, required to enable OIDC
+	%s		oauth2 client id (required)
+	%s	oauth2 client secret (required)
+	%s	callback url, must end with /ui/api/oidc/callback (required)
+	%s	set to true to turn off the password form and registration
+	%s	claim used as the userid (default: preferred_username)
+	%s	whitespace separated extra scopes, openid/email/profile are always sent
+	note: %s must be true when OIDC is enabled
 `,
 		envJWTSecretKey,
 		EnvStorageURL,
@@ -445,5 +475,14 @@ V6 file format support:
 		envHwrHmac,
 		envHwrLangOverride,
 		envHwrHost,
+
+		EnvOIDCProviderURL,
+		EnvOIDCClientID,
+		EnvOIDCClientSecret,
+		EnvOIDCRedirectURL,
+		EnvOIDCDisableLocalLogin,
+		EnvOIDCUserIDClaim,
+		EnvOIDCExtraScopes,
+		envHTTPSCookie,
 	)
 }
