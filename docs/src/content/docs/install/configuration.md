@@ -1,3 +1,7 @@
+---
+title: Configuration
+---
+
 The configuration is made through environment variables.
 
 ## General configuration

@@ -1,4 +1,7 @@
-# Desktop Client
+---
+title: Desktop Client
+---
+
 
 This page covers using the official reMarkable desktop apps with a self-hosted rmfakecloud.
 

@@ -1,4 +1,7 @@
-# Passcode (PIN) Reset
+---
+title: Passcode (PIN) Reset
+---
+
 
 If you forget the passcode on your tablet, the reMarkable lockscreen offers a
 **Forgot PIN** flow that asks the cloud to approve the reset. rmfakecloud

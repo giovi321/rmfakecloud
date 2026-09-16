@@ -1,3 +1,7 @@
+---
+title: Diff Sync
+---
+
 Since the reMarkable 2.10 release, there is a new sync method available: It
 collects only differences instead of uploading the whole document. So it takes
 less time to upload/download large modified documents, and it handles edition

@@ -24,3 +24,8 @@ assets_vfsdata.go
 
 # mkdoc build
 site/
+
+# docs site build output
+docs/node_modules/
+docs/dist/
+docs/.astro/

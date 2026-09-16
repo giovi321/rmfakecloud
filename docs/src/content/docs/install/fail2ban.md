@@ -1,10 +1,13 @@
-# Fail2ban
+---
+title: Fail2ban
+---
+
 
 For a public server [fail2ban](https://www.fail2ban.org/wiki/index.php/Main_Page) adds some security by banning ip's after few (configurable) failed login attempts.
 Assuming rmfakecloud is running in docker via systemd and logs to the syslog (journalctl) and fail2ban is already installed and setup.
 Instructions install and setup fail2ban in the documentation of the used operating system or at https://github.com/fail2ban/fail2ban#installation .
 rmfakecloud needs to trust the reverse proxy in use, i.e. add `RM_TRUST_PROXY=1` to the docker environment,
-see [configuration](configuration.md).
+see [configuration](configuration/).
 
 ## Jail
 First it is necessary to define a jail, e.g. in `/etc/fail2ban/jail.local`:

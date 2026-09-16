@@ -1,4 +1,7 @@
-# Access rmfakecloud from outside your local network safely
+---
+title: Access rmfakecloud from outside your local network safely
+---
+
 
 This guide explains how to get your reMarkable to access rmfakecloud from outside your local network, without exposing rmfakecloud directly to the internet or using VPNs, with a Cloudflare Tunnel and client authentication.
 
@@ -111,7 +114,7 @@ curl --cert client.pfx https://rmfakecloud.example.com
 
 Copy the `client.crt` and `client.key` files to `/home/root/rmfakecloud` with your preferred method (`scp`, WinSCP, etc.).
 
-Install `rmfakecloud-proxy` as the [installation instructions](../remarkable/setup.md#install-rmfakecloud-proxy) explain.
+Install `rmfakecloud-proxy` as the [installation instructions](../remarkable/setup/#install-rmfakecloud-proxy) explain.
 
 When asked for the cloud url, enter your public address. In this case, `https://rmfakecloud.example.com`.
 

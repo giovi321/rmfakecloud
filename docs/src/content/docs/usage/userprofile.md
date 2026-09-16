@@ -1,4 +1,8 @@
-Have a look inside `data` directory ([`DATADIR`](../install/configuration.md)):
+---
+title: Userprofile
+---
+
+Have a look inside `data` directory ([`DATADIR`](../install/configuration/)):
 you'll find under `data/users/` a directory by user (since v0.0.3). The
 directory name is expected to be the username given in the webUI login form.
 
@@ -15,8 +19,8 @@ This file, written in YAML, have the following relevant entries:
 | `password` | Password to access the account (in Argon2 format) |
 | `name` | Name displayed in the webui |
 | `isadmin` | Boolean indicating if the user can perform administration tasks (currently managing user accounts) |
-| `sync15` | Boolean value that indicates if the user is using the [diff synchronization](diff-sync.md) (aka. sync 1.5) |
-| `integrations` | Array with the user integrations. See [Integrations](integrations.md) |
+| `sync15` | Boolean value that indicates if the user is using the [diff synchronization](diff-sync/) (aka. sync 1.5) |
+| `integrations` | Array with the user integrations. See [Integrations](integrations/) |
 
 
 ### Edit settings through CLI
@@ -53,11 +57,11 @@ read -s -p "New password: " NEWPASSWD && rmfakecloud setuser -u ddvk -p "${NEWPA
 ## Directory Structure
 
 In a user directory, there are files like `[UUID].metadata` and `[UUID].zip`
-(if you are not using [sync 1.5](diff-sync.md)): this corresponds to your raw
+(if you are not using [sync 1.5](diff-sync/)): this corresponds to your raw
 documents on your tablet.
 
 There is also a `trash` directory, containing deleted files on the tablet, in
 its trash.
 
-If you are using [sync 1.5](diff-sync.md), the magic happen in the `sync`
+If you are using [sync 1.5](diff-sync/), the magic happen in the `sync`
 directory.

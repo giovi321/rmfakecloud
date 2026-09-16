@@ -1,3 +1,7 @@
+---
+title: Nginx
+---
+
 From @zeigerpuppy
 
 > edit: had to turn off proxy buffering and add `proxy_redirect http:// https://;` for the assets to load properly

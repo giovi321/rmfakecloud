@@ -1,3 +1,7 @@
+---
+title: Integrations
+---
+
 Integration is the [feature added in reMarkable
 2.10](https://support.remarkable.com/hc/en-us/articles/4406214540945)
 that allows to browse, download and upload document from location
@@ -10,7 +14,7 @@ You can edit your integrations using the Integration tab in the UI.
 
 It can be used with any WebDAV services, for example a Nextcloud/Owncloud instance.
 
-Add this to your [`.userprofile`](userprofile.md):
+Add this to your [`.userprofile`](userprofile/):
 
 ```yaml
 integrations:
@@ -45,7 +49,7 @@ integrations:
 
 You can share a dedicated path on your system. This can be a simple directory or a mount point using FUSE or whatever.
 
-Add this to your [`.userprofile`](userprofile.md):
+Add this to your [`.userprofile`](userprofile/):
 
 ```yaml
 integrations:

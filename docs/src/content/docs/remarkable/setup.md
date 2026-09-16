@@ -1,4 +1,7 @@
-# Device Setup
+---
+title: Device Setup
+---
+
 
 There are several ways to make it work, choose whatever works for you
 

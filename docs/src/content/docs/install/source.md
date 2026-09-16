@@ -1,3 +1,7 @@
+---
+title: Basic settings
+---
+
 Building
 ========
 
@@ -59,7 +63,6 @@ depend() {
 /etc/conf.d/rmfakecloud
 
 ```sh
-# Basic settings
 export JWT_SECRET_KEY=SOME_KEY
 export STORAGE_URL=http(s)://host.where.rmfakecloud.is.running
 export PORT=80
@@ -80,7 +83,7 @@ export RMAPI_HWR_APPLICATIONKEY=SOME_KEY
 export RMAPI_HWR_HMAC=SOME_KEY
 ```
 
-Make sure to replace `SOME_KEY` by the return of `openssl rand -base64 48`, see [configuration](configuration.md).
+Make sure to replace `SOME_KEY` by the return of `openssl rand -base64 48`, see [configuration](configuration/).
 
 If using GMail, ensure you enable 2FA on that Google account, generate a GMail app password (https://myaccount.google.com/u/0/apppasswords), and provide the app password instead of the account password above.
 
@@ -127,6 +130,6 @@ RMAPI_HWR_APPLICATIONKEY=SOME_KEY
 RMAPI_HWR_HMAC=SOME_KEY
 ```
 
-Make sure to replace `SOME_KEY` with the output of `openssl rand -base64 48`, see [configuration](configuration.md).
+Make sure to replace `SOME_KEY` with the output of `openssl rand -base64 48`, see [configuration](configuration/).
 
 If using GMail, ensure you enable 2FA on that Google account, generate a GMail app password (https://myaccount.google.com/u/0/apppasswords), and provide the app password instead of the account password above.

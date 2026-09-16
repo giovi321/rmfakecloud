@@ -1,9 +1,12 @@
+---
+title: How I setup rmfakecloud for myself
+---
+
 From discord/xabean#2732 | github.com/warewolf
 
 client: rM2, Toltec, rmfakecloud installed via opkg. Follow the device installation instructions here: https://ddvk.github.io/rmfakecloud/remarkable/setup/
 server: rmfakecloud docker image, docker-compose.yml + env
 
-# How I setup rmfakecloud for myself
 
 General steps:
 
