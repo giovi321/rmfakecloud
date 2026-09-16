@@ -13,10 +13,9 @@ necessary and the tablet can point at a stock build again. Status below is as of
 | `v6-upstream-sync` | `joagonca/master` | the v6 export work, 24 commits: per-page format routing, schema 2 page lists, page templates, ink placement and the landscape turn |
 | `fix-page-pairing` | `ddvk/master` | one commit, `internal/storage/models/archive.go`, so annotations land on the page they were written on |
 | `fix-landscape-rotation` | `ddvk/master` | one commit, turning the ink a quarter turn on a landscape page |
-| `local-build` | `v6-upstream-sync` | adds one `go.mod` replace so the build uses `giovi321/rmc-go`. Every push here is built by CI and published as the rolling `local-build` release, which is what gets deployed |
+| `master` | `ddvk/master` | upstream, plus this fork's work: the v6 branch merged in, the `go.mod` replace onto `giovi321/rmc-go`, the documentation and the build workflow. Every push here is built by CI and published as the rolling `deployed` release |
 | `points-probe` | `v6-upstream-sync` | a test-only helper that dumps a page's stroke points, used to measure ink placement |
 | `measurement-tools` | `v6-upstream-sync` | the scripts under `tools/measure/` that the measurements came from |
-| `master` | `ddvk/master` | upstream, plus this documentation |
 
 ## Open upstream
 
@@ -35,6 +34,6 @@ of everything else, so either can land on its own.
 
 `v6-upstream-sync` is the head of `joagonca/rmfakecloud#4`. A pull request that
 redirects a dependency to its author's own fork is not something a maintainer can
-merge, so the `replace` lives on `local-build` and the PR branch stays clean. Anything
-built for deployment comes from `local-build`; anything offered upstream comes from the
-branch that carries only the fix.
+merge, so the `replace` lives on `master` and the PR branches stay clean. Anything built
+for deployment comes from `master`; anything offered upstream comes from the branch that
+carries only the fix, based on the upstream it targets.

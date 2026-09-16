@@ -2,8 +2,8 @@
 title: Building this fork
 ---
 
-You do not have to build this yourself. Every push to `local-build` is built by the
-`build-binary` workflow and published as a rolling prerelease on the `local-build` tag,
+You do not have to build this yourself. Every push to `master` is built by the
+`build-binary` workflow and published as a rolling prerelease on the `deployed` tag,
 carrying three assets:
 
 | Asset | What it is |
@@ -25,7 +25,7 @@ refuses to start.
 ## Installing the published build
 
 ```bash
-BASE=https://github.com/giovi321/rmfakecloud/releases/download/local-build
+BASE=https://github.com/giovi321/rmfakecloud/releases/download/deployed
 curl -fsSL -o rmfakecloud "$BASE/rmfakecloud-linux-amd64"
 want=$(curl -fsSL "$BASE/rmfakecloud-linux-amd64.sha256" | tr -d '\r\n' | cut -d' ' -f1)
 [ "$want" = "$(sha256sum rmfakecloud | cut -d' ' -f1)" ] || { echo "sha mismatch"; exit 1; }
@@ -59,7 +59,7 @@ through corepack, and cairo development headers. On Debian that is `libcairo2-de
 `pkg-config`; Debian's packaged Go is too old, so install Go from a tarball.
 
 ```bash
-git clone -b local-build https://github.com/giovi321/rmfakecloud
+git clone https://github.com/giovi321/rmfakecloud
 cd rmfakecloud
 
 # the UI first, because go generate embeds ui/dist
@@ -70,7 +70,7 @@ ls -la ui/dist
 # built without them the binary still runs and the export silently degrades.
 go generate ./...
 CGO_ENABLED=1 go build -tags cairo \
-  -ldflags "-s -w -X main.version=local-build-$(git rev-parse --short HEAD)" \
+  -ldflags "-s -w -X main.version=deployed-$(git rev-parse --short HEAD)" \
   -o rmfakecloud ./cmd/rmfakecloud/
 sha256sum rmfakecloud
 ```
@@ -83,7 +83,7 @@ the platform pin first so it builds natively rather than under emulation.
 
 ```bash
 sed -e 's/FROM --platform=[^ ]* /FROM /' Dockerfile > Dockerfile.native
-docker build -f Dockerfile.native --build-arg VERSION=local-build -t rmfakecloud:local .
+docker build -f Dockerfile.native --build-arg VERSION=local -t rmfakecloud:local .
 ```
 
 To take the binary out of the image, read the entrypoint rather than assuming the path.

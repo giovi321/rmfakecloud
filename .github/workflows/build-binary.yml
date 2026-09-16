@@ -1,6 +1,7 @@
 name: Build binary
 
-# The deployable artifact for this fork. The target host cannot build: it has no Go,
+# The deployable artifact for this fork, built on every push to master. The target
+# host cannot build: it has no Go,
 # 642 MB of RAM and a disk it shares with the service, so the binary is built here and
 # installed from the release below.
 #
@@ -10,7 +11,7 @@ name: Build binary
 
 on:
   push:
-    branches: [local-build]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -46,7 +47,7 @@ jobs:
 
       - name: Build the binary
         run: |
-          VERSION="local-build-$(git rev-parse --short HEAD)"
+          VERSION="deployed-$(git rev-parse --short HEAD)"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           go generate ./...
           CGO_ENABLED=1 go build -tags cairo \
@@ -63,9 +64,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release delete deployed --yes --cleanup-tag 2>/dev/null || true
+          # the tag this replaced was named after a branch that no longer exists
           gh release delete local-build --yes --cleanup-tag 2>/dev/null || true
-          gh release create local-build \
+          gh release create deployed \
             --prerelease \
-            --title "Latest local-build ($VERSION)" \
-            --notes "Built from \`local-build\` at \`${{ github.sha }}\`. Stamped \`$VERSION\`, which is the string the update handler compares against the installed binary. Linux amd64, dynamically linked against libcairo." \
+            --title "Deployed build ($VERSION)" \
+            --notes "Built from \`master\` at \`${{ github.sha }}\`. Stamped \`$VERSION\`, which is the string the update handler compares against the installed binary. Linux amd64, dynamically linked against libcairo." \
             rmfakecloud-linux-amd64 rmfakecloud-linux-amd64.sha256 VERSION
