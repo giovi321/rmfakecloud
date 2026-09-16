@@ -2,9 +2,41 @@
 title: Building this fork
 ---
 
+You do not have to build this yourself. Every push to `local-build` is built by the
+`build-binary` workflow and published as a rolling prerelease on the `local-build` tag,
+carrying three assets:
+
+| Asset | What it is |
+|-------|------------|
+| `rmfakecloud-linux-amd64` | the binary, linux amd64, dynamically linked against libcairo |
+| `rmfakecloud-linux-amd64.sha256` | its sha256, as the bare hex digest |
+| `VERSION` | the version string compiled into the binary through `-ldflags` |
+
+`VERSION` exists so that asking "is this release the one installed" costs one plain
+download and is answered by reading the installed binary, rather than by trusting a
+record of what was installed last time. The two differ exactly when somebody replaced
+the binary by hand, which is the case worth catching.
+
+The workflow runs on ubuntu-24.04 on purpose. Its glibc is 2.39 and the target's is
+2.41, and a binary built against an older glibc runs against a newer one. The reverse
+does not, so building on a newer distro than the target would produce something that
+refuses to start.
+
+## Installing the published build
+
+```bash
+BASE=https://github.com/giovi321/rmfakecloud/releases/download/local-build
+curl -fsSL -o rmfakecloud "$BASE/rmfakecloud-linux-amd64"
+want=$(curl -fsSL "$BASE/rmfakecloud-linux-amd64.sha256" | tr -d '\r\n' | cut -d' ' -f1)
+[ "$want" = "$(sha256sum rmfakecloud | cut -d' ' -f1)" ] || { echo "sha mismatch"; exit 1; }
+```
+
+Then install it over the path the unit execs, as below.
+
+## Building it yourself
+
 Two paths, both producing the same binary. The docker path is upstream's `Dockerfile`
-and needs nothing installed. The native path needs a toolchain but no docker, which is
-what a small target host usually has.
+and needs nothing installed. The native path needs a toolchain but no docker.
 
 Whichever you use, the binary is the deliverable. Building and restarting the service
 without an install step in between restarts the old binary, reports the unit as active
