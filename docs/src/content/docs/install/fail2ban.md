@@ -30,3 +30,10 @@ failregex = ^.*, login failed ip:\s+<ADDR>.*$
 in `/etc/fail2ban/filter.d/rmfakecloud.conf` tells fail2ban which lines are relevant.
 
 After creating the necessary configuration, restarting fail2ban loads the changes.
+
+## With OIDC
+
+The filter above matches failed password logins. On an instance running with
+`OIDC_DISABLE_LOCAL_LOGIN=true` there are none, so nothing reaches fail2ban and
+rate limiting belongs to the identity provider instead. With password login left
+enabled alongside OIDC, the filter keeps working as before.
