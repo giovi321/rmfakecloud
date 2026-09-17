@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"sync"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -85,6 +86,10 @@ type ReactAppWrapper struct {
 	templates     *templates.Store
 	oidcProvider  *gooidc.Provider
 	oauth2Config  oauth2.Config
+	oidcMu        sync.Mutex
+	// discoverOIDC is the provider discovery call, injectable so tests can
+	// describe a provider that is down without reaching the network.
+	discoverOIDC func(context.Context, string) (*gooidc.Provider, error)
 }
 
 // hack for serving index.html on /
@@ -131,30 +136,27 @@ func New(cfg *config.Config,
 		mqtt:        mqttBroker,
 	}
 
-	// Discovery is a network call, so it happens once at startup rather than on
-	// every login. A provider that cannot be reached is a configuration error and
-	// stops the server, instead of failing every login later with no explanation.
+	staticWrapper.discoverOIDC = gooidc.NewProvider
+
+	// Discovery is attempted once here so a misconfigured provider is visible in
+	// the startup log rather than at the first login. Failing it is deliberately
+	// not fatal: the tablet's sync does not involve the provider at all, and
+	// taking the service down because an unrelated host is unreachable would make
+	// every restart depend on that host being up first.
 	if cfg.OIDC.Enabled() {
-		provider, err := gooidc.NewProvider(context.Background(), cfg.OIDC.ProviderURL)
-		if err != nil {
-			log.Fatalf("OIDC: cannot discover the provider at %s: %v", cfg.OIDC.ProviderURL, err)
+		if _, _, err := staticWrapper.oidcReady(context.Background()); err != nil {
+			log.Errorf("OIDC: cannot reach the provider at %s: %v", cfg.OIDC.ProviderURL, err)
+			log.Error("OIDC login is unavailable until the provider answers; everything else keeps working")
+		} else {
+			log.Info("OIDC provider ready: ", cfg.OIDC.ProviderURL)
 		}
-		staticWrapper.oidcProvider = provider
-		staticWrapper.oauth2Config = oauth2.Config{
-			ClientID:     cfg.OIDC.ClientID,
-			ClientSecret: cfg.OIDC.ClientSecret,
-			RedirectURL:  cfg.OIDC.RedirectURL,
-			Endpoint:     provider.Endpoint(),
-			Scopes:       cfg.OIDC.Scopes(),
-		}
-		log.Info("OIDC provider ready: ", cfg.OIDC.ProviderURL)
 	}
 
 	return &staticWrapper
 }
 
 // Open opens a file from the fs (virtual)
-func (w ReactAppWrapper) Open(filepath string) (http.File, error) {
+func (w *ReactAppWrapper) Open(filepath string) (http.File, error) {
 	fullpath := filepath
 	//index.html hack
 	if filepath != indexReplacement {
