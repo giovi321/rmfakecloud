@@ -81,6 +81,7 @@ becomes your provider's job.
 
 ### Provider guides
 
+- [Authentik](../oidc/authentik/)
 - [Authelia](../oidc/authelia/)
 
 ## Handwriting recognition
