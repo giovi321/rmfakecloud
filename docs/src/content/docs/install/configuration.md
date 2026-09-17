@@ -70,6 +70,13 @@ set by users themselves.
 Admin is re-evaluated on every login when `OIDC_ADMIN_CLAIM` and
 `OIDC_ADMIN_CLAIM_VALUE` are both set, and left untouched when they are not.
 
+Re-evaluated means both ways. If those two are set and the logging-in user is not
+in the group, their admin flag is cleared, including on an account that was
+already an administrator before OIDC existed. Create the group and put yourself
+in it before the first login, or leave both variables unset and keep managing
+admin by hand. Setting them and creating the group afterwards demotes you on the
+login in between.
+
 ### Revoking access
 
 Disabling an account in your provider does not stop a tablet that is already
