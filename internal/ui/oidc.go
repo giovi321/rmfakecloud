@@ -72,8 +72,58 @@ func (app *ReactAppWrapper) oidcInfo(c *gin.Context) {
 	})
 }
 
+// oidcReady returns once the provider has been discovered, discovering it on
+// first use if startup could not. Discovery fetches signing keys over the
+// network, so the result is kept: this is a per-process cost, not a per-login
+// one. Retrying here rather than at startup is what lets a provider that was
+// down come back without restarting rmfakecloud.
+// It hands both values back rather than leaving callers to read the fields,
+// so every read is under the same lock as the write and no caller can get the
+// ordering wrong by forgetting to call this first.
+func (app *ReactAppWrapper) oidcReady(ctx context.Context) (*gooidc.Provider, oauth2.Config, error) {
+	app.oidcMu.Lock()
+	defer app.oidcMu.Unlock()
+
+	if app.oidcProvider != nil {
+		return app.oidcProvider, app.oauth2Config, nil
+	}
+
+	discover := app.discoverOIDC
+	if discover == nil {
+		discover = gooidc.NewProvider
+	}
+	provider, err := discover(ctx, app.cfg.OIDC.ProviderURL)
+	if err != nil {
+		return nil, oauth2.Config{}, err
+	}
+
+	app.oidcProvider = provider
+	app.oauth2Config = oauth2.Config{
+		ClientID:     app.cfg.OIDC.ClientID,
+		ClientSecret: app.cfg.OIDC.ClientSecret,
+		RedirectURL:  app.cfg.OIDC.RedirectURL,
+		Endpoint:     provider.Endpoint(),
+		Scopes:       app.cfg.OIDC.Scopes(),
+	}
+	return app.oidcProvider, app.oauth2Config, nil
+}
+
+// providerUnavailable reports the provider being unreachable and writes the
+// response. A 503 says "come back later", which is what is actually true.
+func (app *ReactAppWrapper) providerUnavailable(c *gin.Context, err error) {
+	log.Error(oidcLog, "provider not reachable at ", app.cfg.OIDC.ProviderURL, ": ", err)
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable,
+		gin.H{"error": "the identity provider is not reachable"})
+}
+
 // oidcBegin starts the authorization code flow with PKCE, state and nonce.
 func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
+	_, oauth2Config, err := app.oidcReady(c.Request.Context())
+	if err != nil {
+		app.providerUnavailable(c, err)
+		return
+	}
+
 	state, err := randomURLSafeString(32)
 	if err != nil {
 		log.Error(oidcLog, "generating state: ", err)
@@ -97,7 +147,7 @@ func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
 	app.setOIDCCookie(c, oidcNonceCookie, nonce)
 	app.setOIDCCookie(c, oidcVerifierCookie, verifier)
 
-	c.Redirect(http.StatusFound, app.oauth2Config.AuthCodeURL(
+	c.Redirect(http.StatusFound, oauth2Config.AuthCodeURL(
 		state,
 		gooidc.Nonce(nonce),
 		oauth2.S256ChallengeOption(verifier),
@@ -108,6 +158,12 @@ func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
 // protocol level checks, then hands identity and provisioning to completeOIDCLogin.
 func (app *ReactAppWrapper) oidcCallback(c *gin.Context) {
 	ctx := c.Request.Context()
+
+	provider, oauth2Config, err := app.oidcReady(ctx)
+	if err != nil {
+		app.providerUnavailable(c, err)
+		return
+	}
 
 	// The provider's own error text is not repeated back to the browser.
 	if errParam := c.Query("error"); errParam != "" {
@@ -141,7 +197,7 @@ func (app *ReactAppWrapper) oidcCallback(c *gin.Context) {
 	app.clearOIDCCookie(c, oidcNonceCookie)
 	app.clearOIDCCookie(c, oidcVerifierCookie)
 
-	rawClaims, claims, ok := app.exchangeAndVerifyToken(c, ctx, c.Query("code"), verifier)
+	rawClaims, claims, ok := app.exchangeAndVerifyToken(c, ctx, provider, oauth2Config, c.Query("code"), verifier)
 	if !ok {
 		return
 	}
@@ -157,8 +213,8 @@ func (app *ReactAppWrapper) oidcCallback(c *gin.Context) {
 // exchangeAndVerifyToken trades the authorization code for tokens and verifies
 // the ID token. It returns the raw claim map, for configurable dotted paths, and
 // the standard claims. On failure the response has already been written.
-func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.Context, code, verifier string) (map[string]any, oidcClaims, bool) {
-	token, err := app.oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.Context, provider *gooidc.Provider, oauth2Config oauth2.Config, code, verifier string) (map[string]any, oidcClaims, bool) {
+	token, err := oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		log.Error(oidcLog, "token exchange failed: ", err)
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token exchange failed"})
@@ -171,7 +227,7 @@ func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.C
 		return nil, oidcClaims{}, false
 	}
 
-	idToken, err := app.oidcProvider.Verifier(&gooidc.Config{ClientID: app.cfg.OIDC.ClientID}).Verify(ctx, rawIDToken)
+	idToken, err := provider.Verifier(&gooidc.Config{ClientID: app.cfg.OIDC.ClientID}).Verify(ctx, rawIDToken)
 	if err != nil {
 		log.Warn(oidcLog, "id token verification failed: ", err)
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "id token verification failed"})

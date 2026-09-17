@@ -44,11 +44,14 @@ https://authentik.example.com/application/o/<application-slug>/
 with a trailing slash. rmfakecloud strips a trailing slash before asking for the
 discovery document, so discovery succeeds either way, but it then compares the
 issuer the provider reports against the string you configured. Without the
-slash those differ and the server refuses to start:
+slash those differ, and the log carries:
 
 ```
 oidc: issuer did not match the issuer returned by provider
 ```
+
+The server still starts and everything else keeps working, but the OIDC login
+button answers `503` until the value is corrected and rmfakecloud is restarted.
 
 So `OIDC_PROVIDER_URL` must end in `/`.
 
@@ -128,3 +131,10 @@ curl -s https://rm.example.com/ui/api/oidc/info
 
 If `enabled` is false, one of the four required variables is missing. The server
 logs which at startup.
+
+`enabled` being true only means the four variables are set. Whether the provider
+actually answers shows up in the startup log, and in the response to the login
+button: a `503` with `the identity provider is not reachable` means the variables
+are in place and the round trip is not. rmfakecloud retries discovery on each
+login attempt, so once Authentik answers, logins start working without a
+restart.

@@ -39,6 +39,14 @@ server at startup rather than failing quietly at the first login.
 cookies carry the whole flow, and over plain HTTP they are readable. The server
 refuses to start without it.
 
+A configuration mistake stops the server at startup, deliberately, because it
+cannot be fixed without changing the configuration anyway. A provider that is
+simply unreachable does not: rmfakecloud logs it, keeps serving everything else,
+answers the OIDC login with `503`, and retries discovery on each login attempt,
+so a provider that comes back needs no restart here. Tablet sync never involves
+the provider at all, and taking it down because an unrelated host is offline
+would be the wrong trade.
+
 The rest are optional.
 
 | Variable name | Description |

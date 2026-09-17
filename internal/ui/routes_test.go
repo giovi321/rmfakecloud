@@ -1,42 +1,46 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/oauth2"
 )
 
 func routerFor(t *testing.T, cfg *config.Config) *gin.Engine {
+	t.Helper()
+	_, router := oidcAppWith(t, cfg, workingDiscovery(nil))
+	return router
+}
+
+// oidcAppWith builds a wrapper whose provider discovery is supplied by the
+// caller, so the routing tests never reach the network and can describe a
+// provider that is down.
+func oidcAppWith(t *testing.T, cfg *config.Config, discover func(context.Context, string) (*gooidc.Provider, error)) (*ReactAppWrapper, *gin.Engine) {
 	t.Helper()
 	if cfg.JWTSecretKey == nil {
 		cfg.JWTSecretKey = []byte("test-secret")
 	}
 	app := &ReactAppWrapper{
-		cfg:    cfg,
-		prefix: "/assets",
+		cfg:          cfg,
+		prefix:       "/assets",
+		discoverOIDC: discover,
 		fs: http.FS(fstest.MapFS{
 			"index.html":  {Data: []byte("<html>app</html>")},
 			"favicon.ico": {Data: []byte("icon")},
 			"robots.txt":  {Data: []byte("")},
 		}),
 	}
-	// A real provider is discovered over the network in New; the routing tests
-	// only need an authorization endpoint to build a redirect from.
-	app.oauth2Config = oauth2.Config{
-		ClientID:    cfg.OIDC.ClientID,
-		RedirectURL: cfg.OIDC.RedirectURL,
-		Endpoint:    oauth2.Endpoint{AuthURL: "https://sso.example.com/authorize"},
-	}
 
 	router := gin.New()
 	app.RegisterRoutes(router)
-	return router
+	return app, router
 }
 
 func status(t *testing.T, router *gin.Engine, method, path string) int {
