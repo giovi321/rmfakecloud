@@ -1,0 +1,59 @@
+name: Container image
+
+# The same build as build-binary.yml, published as an image for hosts that run this
+# fork under Docker Compose instead of installing the binary. Built by the repository's
+# own Dockerfile, so the UI is built and embedded the same way, and stamped with the
+# same `deployed-<short sha>` version string as the rolling release.
+#
+# Two tags per push: `deployed` moves with master and is what a compose file pulls,
+# `deployed-<short sha>` stays put and is what a rollback pins.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        run: echo "VERSION=deployed-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: VERSION=${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/rmfakecloud:deployed
+            ghcr.io/${{ github.repository_owner }}/rmfakecloud:${{ env.VERSION }}
+          push: true
+
+      # The image must carry the version it was stamped with, or a compose host
+      # cannot tell which build it runs.
+      - name: Check the version is compiled in
+        run: |
+          docker pull "ghcr.io/${{ github.repository_owner }}/rmfakecloud:$VERSION"
+          id=$(docker create "ghcr.io/${{ github.repository_owner }}/rmfakecloud:$VERSION")
+          docker cp "$id:/rmfakecloud" ./rmfakecloud-image
+          docker rm "$id"
+          grep -a -q "$VERSION" rmfakecloud-image
