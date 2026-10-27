@@ -94,6 +94,13 @@ The [fail2ban](../fail2ban/) filter matches failed password logins. With
 `OIDC_DISABLE_LOCAL_LOGIN=true` there are none to match, and rate limiting
 becomes your provider's job.
 
+### Helm
+
+The Secret the chart generates from `rmfakecloud:` values has no OIDC keys. Put
+the `OIDC_*` variables and `RM_HTTPS_COOKIE=true` in a Secret of your own, with
+the rest of the configuration, and name it in `existingSecret`. See
+[Helm](../helm/).
+
 ### Provider guides
 
 - [Authentik](../oidc/authentik/)
